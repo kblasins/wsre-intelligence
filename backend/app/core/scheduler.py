@@ -1,17 +1,23 @@
-"""Background scheduler — runs scrapers and briefing pipeline on a fixed cadence.
+"""Background scheduler — runs infrastructure jobs on a fixed cadence.
 
 Uses APScheduler 4.x AsyncScheduler with in-memory job store (no external broker
 required for local operation). Jobs are re-registered each startup.
 
-Schedule (all times Asia/Riyadh, UTC+3):
-  - REIT snapshots:    every 6h
-  - News scrapers:     every 4h
+Phase 1 (Warsaw fork): All Saudi-specific source scrapers are disabled.
+Active jobs:
   - News body fetcher: every 2h (after triage)
   - News extractor:    every 2h (after body fetch)
-  - Listings (Aqar):   every 12h
-  - Tenders (Etimad):  every 24h (09:00)
-  - REGA transactions: every 24h (07:00)
-  - Weekly brief:      Sunday 08:00 (week_ending = Saturday)
+  - POI refresh:       Sunday 02:00 UTC
+  - District velocity: Sunday 03:00 UTC
+  - fact_resolved:     nightly 04:30 UTC
+  - Weekly brief:      Sunday 05:00 UTC
+
+Disabled (Saudi-specific) — uncomment to re-enable when Warsaw sources added:
+  - tadawul (REIT snapshots)
+  - argaam_en / argaam_ar / saudi_gazette / arab_news / modon (news scrapers)
+  - aqar (listings)
+  - etimad (tenders)
+  - rega (transactions)
 """
 
 from __future__ import annotations
@@ -203,32 +209,37 @@ async def start_scheduler() -> AsyncScheduler:
     s = AsyncScheduler()
     await s.__aenter__()  # initialize data stores and task group
 
-    # REIT snapshots — every 6 hours
-    await s.add_schedule(_run_tadawul, IntervalTrigger(hours=6), id="tadawul")
+    # ── Saudi-specific scrapers DISABLED (Phase 1 — Warsaw fork) ───────────────
+    # Uncomment each block when the corresponding Warsaw data source is added.
 
-    # News scrapers — every 4 hours, staggered by 90s each
-    news_jobs: list[tuple[str, object]] = [
-        ("argaam_en", _run_argaam_en),
-        ("argaam_ar", _run_argaam_ar),
-        ("saudi_gazette", _run_saudi_gazette),
-        ("arab_news", _run_arab_news),
-        ("modon", _run_modon),
-    ]
-    for i, (src_id, fn) in enumerate(news_jobs):
-        await s.add_schedule(fn, IntervalTrigger(hours=4, seconds=i * 90), id=f"news_{src_id}")
+    # # REIT snapshots — every 6 hours
+    # await s.add_schedule(_run_tadawul, IntervalTrigger(hours=6), id="tadawul")
 
-    # Listings — every 12 hours
-    await s.add_schedule(_run_aqar, IntervalTrigger(hours=12), id="aqar")
+    # # News scrapers — every 4 hours, staggered by 90s each
+    # news_jobs: list[tuple[str, object]] = [
+    #     ("argaam_en", _run_argaam_en),
+    #     ("argaam_ar", _run_argaam_ar),
+    #     ("saudi_gazette", _run_saudi_gazette),
+    #     ("arab_news", _run_arab_news),
+    #     ("modon", _run_modon),
+    # ]
+    # for i, (src_id, fn) in enumerate(news_jobs):
+    #     await s.add_schedule(fn, IntervalTrigger(hours=4, seconds=i * 90), id=f"news_{src_id}")
 
-    # Tenders — daily at 09:00 Riyadh (06:00 UTC)
-    await s.add_schedule(
-        _run_etimad, CronTrigger(hour=6, minute=0, timezone="UTC"), id="etimad"
-    )
+    # # Listings — every 12 hours
+    # await s.add_schedule(_run_aqar, IntervalTrigger(hours=12), id="aqar")
 
-    # REGA transactions — daily at 07:00 Riyadh (04:00 UTC)
-    await s.add_schedule(
-        _run_rega, CronTrigger(hour=4, minute=0, timezone="UTC"), id="rega"
-    )
+    # # Tenders — daily at 09:00 Riyadh (06:00 UTC)
+    # await s.add_schedule(
+    #     _run_etimad, CronTrigger(hour=6, minute=0, timezone="UTC"), id="etimad"
+    # )
+
+    # # REGA transactions — daily at 07:00 Riyadh (04:00 UTC)
+    # await s.add_schedule(
+    #     _run_rega, CronTrigger(hour=4, minute=0, timezone="UTC"), id="rega"
+    # )
+
+    # ── Generic infrastructure jobs (always active) ────────────────────────────
 
     # News body fetcher — every 2 hours (offset 30min)
     await s.add_schedule(
@@ -261,7 +272,7 @@ async def start_scheduler() -> AsyncScheduler:
         id="fact_resolved",
     )
 
-    # Weekly brief — Sunday 05:00 UTC (08:00 Riyadh)
+    # Weekly brief — Sunday 05:00 UTC
     await s.add_schedule(
         _run_weekly_brief,
         CronTrigger(day_of_week="sun", hour=5, minute=0, timezone="UTC"),
@@ -271,12 +282,10 @@ async def start_scheduler() -> AsyncScheduler:
     await s.start_in_background()
     scheduler = s
     job_ids = [
-        "tadawul", "aqar", "etimad", "rega",
         "news_body", "news_extract",
         "overpass_poi", "district_velocity", "fact_resolved", "weekly_brief",
-        *[f"news_{src}" for src in ["argaam_en", "argaam_ar", "saudi_gazette", "arab_news", "modon"]],
     ]
-    log.info("scheduler_started", job_count=len(job_ids))
+    log.info("scheduler_started", job_count=len(job_ids), note="saudi_scrapers_disabled")
     return s
 
 

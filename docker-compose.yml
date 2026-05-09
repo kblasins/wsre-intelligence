@@ -1,4 +1,4 @@
-name: ws-hub
+name: wsre-intelligence
 
 # Local development only — Postgres 17 + Redis.
 # The FastAPI backend and Vite frontend run directly on the Mac (not in Docker)
@@ -14,7 +14,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-wsuser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wspass}
-      POSTGRES_DB: ${POSTGRES_DB:-wshub}
+      POSTGRES_DB: ${POSTGRES_DB:-wsre}
     ports:
       - "5432:5432"
     volumes:
@@ -23,7 +23,7 @@ services:
     command: >
       postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wsuser} -d ${POSTGRES_DB:-wshub}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wsuser} -d ${POSTGRES_DB:-wsre}"]
       interval: 5s
       timeout: 5s
       retries: 10

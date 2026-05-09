@@ -119,9 +119,9 @@ type-check: ## Mypy strict type check
 backup: ## pg_dump → ./data/backups/ (keeps last 14)
 	@mkdir -p data/backups
 	@TIMESTAMP=$$(date +%Y%m%d_%H%M%S); \
-	FILE="data/backups/wshub_$${TIMESTAMP}.sql.gz"; \
+	FILE="data/backups/wsre_$${TIMESTAMP}.sql.gz"; \
 	PGPASSWORD=$${POSTGRES_PASSWORD:-wspass} pg_dump \
-	  -h localhost -U $${POSTGRES_USER:-wsuser} $${POSTGRES_DB:-wshub} \
+	  -h localhost -U $${POSTGRES_USER:-wsuser} $${POSTGRES_DB:-wsre} \
 	  --format=custom --compress=9 > "$$FILE" && \
 	echo "Backup saved: $$FILE ($$(du -sh $$FILE | cut -f1))"
 	@ls -t data/backups/*.sql.gz | tail -n +15 | xargs rm -f 2>/dev/null || true
@@ -133,20 +133,20 @@ restore-test: ## Restore latest backup to scratch DB + run smoke queries
 	echo "Testing restore of: $$LATEST"; \
 	PGPASSWORD=$${POSTGRES_PASSWORD:-wspass} psql \
 	  -h localhost -U $${POSTGRES_USER:-wsuser} postgres \
-	  -c "DROP DATABASE IF EXISTS wshub_restore_test" 2>/dev/null; \
+	  -c "DROP DATABASE IF EXISTS wsre_restore_test" 2>/dev/null; \
 	PGPASSWORD=$${POSTGRES_PASSWORD:-wspass} psql \
 	  -h localhost -U $${POSTGRES_USER:-wsuser} postgres \
-	  -c "CREATE DATABASE wshub_restore_test"; \
+	  -c "CREATE DATABASE wsre_restore_test"; \
 	PGPASSWORD=$${POSTGRES_PASSWORD:-wspass} pg_restore \
 	  -h localhost -U $${POSTGRES_USER:-wsuser} \
-	  -d wshub_restore_test "$$LATEST"; \
+	  -d wsre_restore_test "$$LATEST"; \
 	echo "Smoke queries:"; \
 	PGPASSWORD=$${POSTGRES_PASSWORD:-wspass} psql \
-	  -h localhost -U $${POSTGRES_USER:-wsuser} wshub_restore_test \
+	  -h localhost -U $${POSTGRES_USER:-wsuser} wsre_restore_test \
 	  -c "SELECT 'transactions' AS tbl, count(*) FROM transactions UNION ALL SELECT 'reit_snapshots', count(*) FROM reit_snapshots UNION ALL SELECT 'listings', count(*) FROM listings;"; \
 	PGPASSWORD=$${POSTGRES_PASSWORD:-wspass} psql \
 	  -h localhost -U $${POSTGRES_USER:-wsuser} postgres \
-	  -c "DROP DATABASE wshub_restore_test"; \
+	  -c "DROP DATABASE wsre_restore_test"; \
 	echo "Restore test PASSED"
 
 # ── Logs ──────────────────────────────────────────────────────────────────────

@@ -64,32 +64,9 @@ _RULES = {
 }
 
 def upgrade() -> None:
-    rules_json = json.dumps(_RULES).replace("'", "''")  # escape for SQL literal
-    op.execute(
-        text(
-            f"""
-            INSERT INTO regulatory_zones
-                (zone_type, name_en, name_ar, polygon, rules,
-                 effective_from, source, source_url, source_citation,
-                 last_verified_at, created_at)
-            VALUES
-                (
-                    'modon_industrial',
-                    'MODON Riyadh 1st Industrial City',
-                    'المدينة الصناعية الأولى بالرياض',
-                    ST_MakeValid(ST_GeomFromEWKT('{_POLYGON_WKT}')),
-                    '{rules_json}'::jsonb,
-                    '2000-01-01',
-                    'modon_public_approximate',
-                    'https://modon.gov.sa/en/IndustrialCities/Pages/Riyadh.aspx',
-                    'MODON public portal + OSM Relation #2900093 (simplified, confidence=low)',
-                    NOW(),
-                    NOW()
-                )
-            ON CONFLICT DO NOTHING
-            """
-        )
-    )
+    # Saudi-specific seed data disabled in WSRE Intelligence fork (Phase 1).
+    # Warsaw regulatory zones will be added in a future migration.
+    pass
 
 
 def downgrade() -> None:

@@ -140,7 +140,7 @@ function AppShell() {
     <div style={{ minHeight: "100vh", background: "var(--bg-page)", display: "flex", flexDirection: "column" }}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className="ws-header">
-        <span className="ws-brand">White Star</span>
+        <span className="ws-brand">WSRE Intelligence</span>
         <div className="ws-vr" />
         <span className="ws-context">Riyadh Industrial</span>
 

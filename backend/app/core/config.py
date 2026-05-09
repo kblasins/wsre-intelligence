@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # ── Database ─────────────────────────────────────────────────────────────
     database_url: PostgresDsn = PostgresDsn(  # type: ignore[assignment]
-        "postgresql+asyncpg://wsuser:wspass@localhost:5432/wshub"
+        "postgresql+asyncpg://wsuser:wspass@localhost:5432/wsre"
     )
 
     # ── Redis ─────────────────────────────────────────────────────────────────
@@ -109,9 +109,9 @@ class Settings(BaseSettings):
     # ── Test / golden set ────────────────────────────────────────────────────
     golden_set_dir: Path = PROJECT_ROOT / "backend" / "tests" / "golden"
     # Separate test DB so `make test` never touches production data.
-    # Must exist before running tests: createdb wshub_test
+    # Must exist before running tests: createdb wsre_test
     test_database_url: PostgresDsn = PostgresDsn(  # type: ignore[assignment]
-        "postgresql+asyncpg://wsuser:wspass@localhost:5432/wshub_test"
+        "postgresql+asyncpg://wsuser:wspass@localhost:5432/wsre_test"
     )
 
     def get_redis_url(self) -> str:

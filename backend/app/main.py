@@ -1,4 +1,4 @@
-"""White Star Market Intelligence Hub — FastAPI application.
+"""WSRE Intelligence — FastAPI application.
 
 Runs on localhost:8000 in local development.
 Frontend (Vite) runs on localhost:3000 and proxies /api/* here.
@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(
-    title="White Star Market Intelligence Hub",
+    title="WSRE Intelligence API",
     version="0.1.0",
     # Docs always available in local mode
     docs_url="/api/docs",

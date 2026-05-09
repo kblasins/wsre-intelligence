@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ws-hub-backend"
+name = "wsre-intelligence-backend"
 version = "0.1.0"
-description = "White Star Market Intelligence Hub — backend API, ingestion, and briefing engine"
+description = "WSRE Intelligence — Warsaw real estate market intelligence platform — backend API, ingestion, and briefing engine"
 requires-python = ">=3.12"
 dependencies = [
     # Web framework

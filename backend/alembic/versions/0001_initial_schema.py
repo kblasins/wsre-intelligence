@@ -44,36 +44,6 @@ def upgrade() -> None:
         END $$
     """)
 
-    # ── district_aliases ───────────────────────────────────────────────────
-    op.execute("""
-        CREATE TABLE IF NOT EXISTS district_aliases (
-            id          SERIAL PRIMARY KEY,
-            canonical_id INTEGER NOT NULL,
-            alias        VARCHAR(300) NOT NULL,
-            alias_lang   VARCHAR(10) NOT NULL,
-            source       VARCHAR(100),
-            name_ar      VARCHAR(300),
-            name_en      VARCHAR(300),
-            city         VARCHAR(100) NOT NULL DEFAULT 'Riyadh',
-            CONSTRAINT uq_district_alias_source UNIQUE (alias, source)
-        )
-    """)
-
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_district_alias_canonical
-            ON district_aliases (canonical_id)
-    """)
-
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_district_alias_lookup
-            ON district_aliases (alias)
-    """)
-
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_district_alias_trgm
-            ON district_aliases USING GIN (alias gin_trgm_ops)
-    """)
-
     # ── transactions ───────────────────────────────────────────────────────
     op.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
@@ -226,29 +196,6 @@ def upgrade() -> None:
             ON news_articles (source, published_at DESC)
     """)
 
-    # ── tenders ────────────────────────────────────────────────────────────
-    op.execute("""
-        CREATE TABLE IF NOT EXISTS tenders (
-            id           BIGSERIAL PRIMARY KEY,
-            etimad_id    VARCHAR(200) NOT NULL,
-            entity_name  VARCHAR(500),
-            title_ar     TEXT,
-            title_en     TEXT,
-            value_sar    NUMERIC(18,2),
-            published_at TIMESTAMPTZ,
-            deadline_at  TIMESTAMPTZ,
-            raw_json     JSONB NOT NULL DEFAULT '{}',
-            raw_uri      TEXT,
-            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            CONSTRAINT uq_tender_etimad_id UNIQUE (etimad_id)
-        )
-    """)
-
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_tender_entity_published
-            ON tenders (entity_name, published_at DESC)
-    """)
-
     # ── raw_ingest_outbox ──────────────────────────────────────────────────
     op.execute("""
         CREATE TABLE IF NOT EXISTS raw_ingest_outbox (
@@ -347,22 +294,6 @@ def upgrade() -> None:
         CREATE INDEX IF NOT EXISTS ix_review_pending
             ON review_queue (reviewed_at, is_golden)
             WHERE reviewed_at IS NULL
-    """)
-
-    # ── users (fastapi-users) ──────────────────────────────────────────────
-    op.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            email           VARCHAR(320) NOT NULL UNIQUE,
-            hashed_password VARCHAR(1024) NOT NULL,
-            is_active       BOOLEAN NOT NULL DEFAULT true,
-            is_superuser    BOOLEAN NOT NULL DEFAULT false,
-            is_verified     BOOLEAN NOT NULL DEFAULT false
-        )
-    """)
-
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_users_email ON users (email)
     """)
 
     # ── fact_resolved materialized view ────────────────────────────────────

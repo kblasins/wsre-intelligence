@@ -70,7 +70,7 @@ export function LoginPage() {
             color: "var(--color-text-primary)",
             marginBottom: "4px",
           }}>
-            White Star
+            WSRE Intelligence
           </div>
           <div style={{
             fontSize: "9px",

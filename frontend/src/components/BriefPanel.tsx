@@ -205,7 +205,7 @@ export function BriefPanel() {
             marginTop: "40px", paddingTop: "14px", borderTop: "1px solid var(--divider)",
             fontSize: "11px", color: "var(--text-tertiary)",
           }}>
-            Strictly private &amp; confidential · White Star Real Estate · Internal circulation only
+            Strictly private &amp; confidential · WSRE Intelligence · Internal circulation only
           </div>
         </article>
       )}

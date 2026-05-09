@@ -118,7 +118,7 @@ async def get_brief_pdf(
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="white-star-brief-{week}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="wsre-intelligence-brief-{week}.pdf"'},
     )
 
 
