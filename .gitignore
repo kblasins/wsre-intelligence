@@ -1,0 +1,49 @@
+# Secrets
+.env.local
+.env
+*.pem
+*.key
+
+# Local data (gitignored but dirs scaffolded with .gitkeep)
+data/raw/**
+!data/raw/.gitkeep
+data/briefs/**
+!data/briefs/.gitkeep
+data/backups/**
+!data/backups/.gitkeep
+data/state/
+
+# Logs
+logs/*.log
+logs/*.log.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+backend/.venv/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/htmlcov/
+backend/coverage.xml
+backend/*.egg-info/
+
+# VCR cassettes — committed for reproducibility except live captures
+# backend/tests/cassettes/*.yaml  <- commit these
+# Playwright session state (contains auth cookies)
+backend/tests/cassettes/live/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp

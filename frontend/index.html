@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>White Star Market Intelligence Hub</title>
+    <!-- Preconnect to Google Fonts for IBM Plex Sans + IBM Plex Sans Arabic -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <style>
+      /* Prevent flash of unstyled content before fonts load */
+      body { opacity: 0; transition: opacity 0.1s; }
+      body.fonts-loaded { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Mark fonts as loaded once the page is ready
+      document.fonts.ready.then(() => document.body.classList.add('fonts-loaded'));
+    </script>
+  </body>
+</html>

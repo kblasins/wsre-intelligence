@@ -1,0 +1,52 @@
+name: ws-hub
+
+# Local development only — Postgres 17 + Redis.
+# The FastAPI backend and Vite frontend run directly on the Mac (not in Docker)
+# so hot-reload works without volume mount latency.
+#
+# Start with: make up
+# Stop with:  make down
+
+services:
+  postgres:
+    image: postgis/postgis:17-3.5
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wsuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wspass}
+      POSTGRES_DB: ${POSTGRES_DB:-wshub}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: >
+      postgres -c config_file=/etc/postgresql/postgresql.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wsuser} -d ${POSTGRES_DB:-wshub}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+        --save 60 1
+        --loglevel warning
+        ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:
