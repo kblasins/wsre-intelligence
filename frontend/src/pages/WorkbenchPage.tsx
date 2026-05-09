@@ -99,8 +99,8 @@ function SavedSitesPanel({
 }) {
   const [newName, setNewName] = useState("");
   const [newClass, setNewClass] = useState("");
-  const [pinLng, setPinLng] = useState("46.675");
-  const [pinLat, setPinLat] = useState("24.688");
+  const [pinLng, setPinLng] = useState("21.017");
+  const [pinLat, setPinLat] = useState("52.237");
   const [creating, setCreating] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -1262,9 +1262,9 @@ const noDataStyle: React.CSSProperties = {
   fontStyle: "italic",
 };
 
-// ── Map center — Riyadh Second Industrial City ────────────────────────────────
+// ── Map center — Warsaw ────────────────────────────────────────────────────────
 
-const RIYADH_CENTER = { lng: 46.675, lat: 24.688 };
+const WARSAW_CENTER = { lng: 21.017, lat: 52.237 };
 
 // ── Main WorkbenchPage ────────────────────────────────────────────────────────
 
@@ -2014,7 +2014,7 @@ export function WorkbenchPage() {
             {lang === "en" ? "AR" : "EN"}
           </button>
           <span style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>
-            Riyadh Metro · WGS-84
+            Warsaw · WGS-84
           </span>
         </div>
       </div>
@@ -2035,8 +2035,8 @@ export function WorkbenchPage() {
           <Map
             ref={mapRef}
             initialViewState={{
-              longitude: RIYADH_CENTER.lng,
-              latitude: RIYADH_CENTER.lat,
+              longitude: WARSAW_CENTER.lng,
+              latitude: WARSAW_CENTER.lat,
               zoom: 12,
             }}
             style={{ width: "100%", height: "100%", cursor: drawMode ? "crosshair" : "grab" }}

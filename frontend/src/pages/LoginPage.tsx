@@ -93,7 +93,7 @@ export function LoginPage() {
               required
               autoFocus
               style={inputStyle}
-              placeholder="analyst@whitestarksa.com"
+              placeholder="analyst@wsre.local"
             />
           </div>
 
@@ -151,7 +151,7 @@ export function LoginPage() {
           textAlign: "center",
           fontFamily: "var(--font-mono)",
         }}>
-          Internal use only · Riyadh, KSA
+          Internal use only · Warsaw, PL
         </div>
       </div>
     </div>
