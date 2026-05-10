@@ -1,2715 +1,858 @@
-/**
- * WorkbenchPage — Phase 3.5 Spatial Intelligence Workbench
- *
- * Three-pane layout:
- *   Left  (280px) — Saved Sites CRUD list
- *   Center (flex) — MapLibre base map with spatial layers
- *   Right  (360px) — Site Evaluation panel (SSE-streamed results)
- */
+// Workbench V2 — three-pane: 260px saved-deals/layers | map | 480px PlotEvaluation
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type * as GeoJSON from "geojson";
-import { useDistrictVelocity } from "../hooks/useMarketData";
-import type { VelocityRow } from "../hooks/useMarketData";
-import { getStoredLang, setLang } from "../lib/i18n";
-import type { Lang } from "../lib/i18n";
-import Map, {
-  Layer,
-  Marker,
-  NavigationControl,
-  Popup,
-  Source,
-  type MapLayerMouseEvent,
-  type MapRef,
-} from "react-map-gl/maplibre";
+import { useRef, useState } from "react";
+import Map, { NavigationControl, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 
-const API_BASE = "/api";
+// ── Static data ────────────────────────────────────────────────────────────────
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+const SAVED_DEALS = [
+  { id: "d1", label: "Białołęka greenfield 14ha", district: "Białołęka",  days: 2,  active: false },
+  { id: "d2", label: "ul. Towarowa 28 — Wola",    district: "Wola",       days: 0,  active: true  },
+  { id: "d3", label: "Mokotów Służewiec PRS",     district: "Mokotów",    days: 5,  active: false },
+  { id: "d4", label: "Praga-Płd. Kamionek plot",  district: "Praga-Płd",  days: 11, active: false },
+  { id: "d5", label: "Wilanów North 8ha",         district: "Wilanów",    days: 18, active: false },
+];
 
-interface SavedSite {
-  id: number;
-  name: string;
-  description: string | null;
-  geometry_geojson: string;
-  asset_class: string | null;
-  target_gfa_sqm: number | null;
-  notes: string | null;
-  created_at: string;
-  updated_at: string;
-}
+interface LayerChild { label: string; on: boolean; }
+interface LayerCat { key: string; label: string; open: boolean; children: LayerChild[]; }
 
-interface EvalSection {
-  section: string;
-  data: Record<string, unknown>;
-}
+const INITIAL_LAYER_TREE: LayerCat[] = [
+  { key: "plots",    label: "Plots & Zoning", open: true, children: [
+    { label: "Plot boundaries",        on: true  },
+    { label: "MPZP coverage",          on: true  },
+    { label: "MPZP function",          on: false },
+    { label: "WZ decisions (24m)",     on: false },
+    { label: "Conservation areas",     on: false },
+  ]},
+  { key: "pipeline", label: "Pipeline", open: true, children: [
+    { label: "New residential (Jawność)", on: true  },
+    { label: "Office under construction", on: false },
+    { label: "Logistics under construction", on: false },
+    { label: "Permits issued (24m)",     on: false },
+  ]},
+  { key: "tx",       label: "Transactions", open: false, children: [
+    { label: "Land tx (24m, by PLN/m²)", on: false },
+    { label: "Apartment tx heatmap",     on: false },
+    { label: "Office tx (institutional)",on: false },
+    { label: "Logistics tx",             on: false },
+  ]},
+  { key: "infra",    label: "Infrastructure", open: true, children: [
+    { label: "Metro + planned extensions", on: true  },
+    { label: "Tram",                       on: false },
+    { label: "Major roads",                on: false },
+    { label: "Schools",                    on: false },
+    { label: "Hospitals",                  on: false },
+    { label: "Parks",                      on: false },
+  ]},
+  { key: "demo",     label: "Demographics", open: false, children: [
+    { label: "Population density",   on: false },
+    { label: "Income heatmap",       on: false },
+    { label: "Age 25-44 concentration", on: false },
+  ]},
+  { key: "intel",    label: "Intelligence", open: false, children: [
+    { label: "News pins (7d)",    on: false },
+    { label: "Regulatory events", on: false },
+    { label: "Tenant signals",    on: false },
+  ]},
+];
 
-// ── API helpers ────────────────────────────────────────────────────────────────
+// ── Plot data ─────────────────────────────────────────────────────────────────
 
-function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem("ws_token");
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-async function fetchSites(): Promise<SavedSite[]> {
-  const r = await fetch(`${API_BASE}/spatial/sites`, {
-    headers: authHeaders(),
-  });
-  if (!r.ok) throw new Error("Failed to load sites");
-  return r.json();
-}
-
-async function deleteSite(id: number): Promise<void> {
-  const r = await fetch(`${API_BASE}/spatial/sites/${id}`, {
-    method: "DELETE",
-    headers: authHeaders(),
-  });
-  if (!r.ok && r.status !== 204) throw new Error("Delete failed");
-}
-
-async function createSite(payload: {
-  name: string;
-  geometry_geojson: string;
-  asset_class?: string;
-}): Promise<{ id: number }> {
-  const r = await fetch(`${API_BASE}/spatial/sites`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) throw new Error("Create failed");
-  return r.json();
-}
-
-// ── Left rail — Saved Sites ────────────────────────────────────────────────────
-
-function SavedSitesPanel({
-  sites,
-  selected,
-  onSelect,
-  onDelete,
-  onRefresh,
-}: {
-  sites: SavedSite[];
-  selected: number | null;
-  onSelect: (site: SavedSite) => void;
-  onDelete: (id: number) => void;
-  onRefresh: () => void;
-}) {
-  const [newName, setNewName] = useState("");
-  const [newClass, setNewClass] = useState("");
-  const [pinLng, setPinLng] = useState("21.017");
-  const [pinLat, setPinLat] = useState("52.237");
-  const [creating, setCreating] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  async function handleCreate() {
-    if (!newName.trim()) return;
-    setCreating(true);
-    setMsg(null);
-    try {
-      const lng = parseFloat(pinLng);
-      const lat = parseFloat(pinLat);
-      if (isNaN(lng) || isNaN(lat)) {
-        setMsg("Invalid coordinates");
-        return;
-      }
-      const geojson = JSON.stringify({
-        type: "Point",
-        coordinates: [lng, lat],
-      });
-      await createSite({
-        name: newName.trim(),
-        geometry_geojson: geojson,
-        ...(newClass ? { asset_class: newClass } : {}),
-      });
-      setNewName("");
-      setNewClass("");
-      setMsg("Saved");
-      onRefresh();
-    } catch {
-      setMsg("Error saving site");
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  return (
-    <div
-      style={{
-        width: "280px",
-        flexShrink: 0,
-        borderRight: "1px solid var(--color-border-subtle)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
-      {/* Header */}
-      <div
-        style={{
-          padding: "12px 16px",
-          borderBottom: "1px solid var(--color-border-subtle)",
-        }}
-      >
-        <div
-          style={{
-            fontSize: "9px",
-            fontWeight: 600,
-            letterSpacing: "0.14em",
-            textTransform: "uppercase",
-            color: "var(--color-text-tertiary)",
-          }}
-        >
-          Saved Sites
-        </div>
-      </div>
-
-      {/* Site list */}
-      <div style={{ flex: 1, overflowY: "auto" }}>
-        {sites.length === 0 && (
-          <div
-            style={{
-              padding: "24px 16px",
-              fontSize: "11px",
-              color: "var(--color-text-tertiary)",
-            }}
-          >
-            No sites saved yet. Drop a pin below.
-          </div>
-        )}
-        {sites.map((s) => (
-          <div
-            key={s.id}
-            onClick={() => onSelect(s)}
-            style={{
-              padding: "10px 16px",
-              borderBottom: "1px solid var(--color-border-subtle)",
-              cursor: "pointer",
-              background:
-                selected === s.id
-                  ? "var(--color-bg-elevated)"
-                  : "transparent",
-              display: "flex",
-              alignItems: "flex-start",
-              gap: "8px",
-            }}
-          >
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
-                style={{
-                  fontSize: "11px",
-                  color: "var(--color-text-primary)",
-                  fontWeight: selected === s.id ? 600 : 400,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {s.name}
-              </div>
-              {s.asset_class && (
-                <div
-                  style={{
-                    fontSize: "9px",
-                    color: "var(--color-text-tertiary)",
-                    marginTop: "2px",
-                  }}
-                >
-                  {s.asset_class}
-                </div>
-              )}
-            </div>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(s.id);
-              }}
-              title="Delete site"
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "var(--color-text-tertiary)",
-                cursor: "pointer",
-                fontSize: "12px",
-                padding: "0",
-                lineHeight: 1,
-                flexShrink: 0,
-              }}
-            >
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
-
-      {/* Create new site */}
-      <div
-        style={{
-          padding: "12px 16px",
-          borderTop: "1px solid var(--color-border-subtle)",
-          display: "flex",
-          flexDirection: "column",
-          gap: "6px",
-        }}
-      >
-        <div
-          style={{
-            fontSize: "9px",
-            fontWeight: 600,
-            letterSpacing: "0.12em",
-            textTransform: "uppercase",
-            color: "var(--color-text-tertiary)",
-            marginBottom: "2px",
-          }}
-        >
-          Drop pin
-        </div>
-        <input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="Site name"
-          style={inputStyle}
-        />
-        <div style={{ display: "flex", gap: "6px" }}>
-          <input
-            value={pinLng}
-            onChange={(e) => setPinLng(e.target.value)}
-            placeholder="Lon"
-            style={{ ...inputStyle, flex: 1 }}
-          />
-          <input
-            value={pinLat}
-            onChange={(e) => setPinLat(e.target.value)}
-            placeholder="Lat"
-            style={{ ...inputStyle, flex: 1 }}
-          />
-        </div>
-        <select
-          value={newClass}
-          onChange={(e) => setNewClass(e.target.value)}
-          style={inputStyle}
-        >
-          <option value="">Asset class (opt.)</option>
-          <option value="warehouse">Warehouse</option>
-          <option value="factory">Factory</option>
-          <option value="office">Office</option>
-          <option value="retail">Retail</option>
-          <option value="logistics">Logistics</option>
-          <option value="mixed">Mixed-use</option>
-        </select>
-        <button
-          onClick={handleCreate}
-          disabled={creating || !newName.trim()}
-          style={btnStyle}
-        >
-          {creating ? "Saving…" : "Save site"}
-        </button>
-        {msg && (
-          <div
-            style={{
-              fontSize: "10px",
-              color:
-                msg === "Saved"
-                  ? "var(--color-positive)"
-                  : "var(--color-negative)",
-            }}
-          >
-            {msg}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Velocity panel — shown when no site is selected ───────────────────────────
-
-function VelocityPanel() {
-  const [propType, setPropType] = useState("warehouse");
-  const { data: rows = [], isLoading } = useDistrictVelocity(propType);
-
-  const maxCount = rows.reduce((m, r) => Math.max(m, r.tx_count), 1);
-
-  function momentumColor(pct: number | null): string {
-    if (pct == null) return "var(--color-text-tertiary)";
-    if (pct > 5) return "var(--color-positive)";
-    if (pct < -5) return "var(--color-negative)";
-    return "var(--color-text-secondary)";
-  }
-
-  return (
-    <div
-      style={{
-        width: "360px",
-        flexShrink: 0,
-        borderLeft: "1px solid var(--color-border-subtle)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
-      <div
-        style={{
-          padding: "12px 16px",
-          borderBottom: "1px solid var(--color-border-subtle)",
-        }}
-      >
-        <div
-          style={{
-            fontSize: "9px",
-            fontWeight: 600,
-            letterSpacing: "0.14em",
-            textTransform: "uppercase",
-            color: "var(--color-text-tertiary)",
-          }}
-        >
-          District Velocity · 90d
-        </div>
-        <div style={{ marginTop: "8px" }}>
-          <select
-            value={propType}
-            onChange={(e) => setPropType(e.target.value)}
-            style={inputStyle}
-          >
-            <option value="warehouse">Warehouse</option>
-            <option value="factory">Factory</option>
-            <option value="office">Office</option>
-            <option value="retail">Retail</option>
-          </select>
-        </div>
-      </div>
-
-      <div style={{ flex: 1, overflowY: "auto" }}>
-        {isLoading && (
-          <div style={{ padding: "16px", fontSize: "11px", color: "var(--color-text-tertiary)" }}>
-            Loading…
-          </div>
-        )}
-        {!isLoading && rows.length === 0 && (
-          <div style={{ padding: "16px", fontSize: "11px", color: "var(--color-text-tertiary)" }}>
-            No velocity data yet. Run migration 0009 and refresh.
-          </div>
-        )}
-        {rows.slice(0, 20).map((r) => (
-          <div
-            key={`${r.district_key}-${r.property_type}`}
-            style={{
-              padding: "8px 16px",
-              borderBottom: "1px solid var(--color-border-subtle)",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                marginBottom: "4px",
-              }}
-            >
-              <span
-                style={{
-                  fontSize: "10px",
-                  color: "var(--color-text-primary)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  maxWidth: "200px",
-                }}
-              >
-                {r.district_name}
-              </span>
-              <span
-                style={{
-                  fontSize: "10px",
-                  fontVariantNumeric: "tabular-nums",
-                  color: momentumColor(r.avg_momentum_pct),
-                }}
-              >
-                {r.avg_momentum_pct != null
-                  ? `${r.avg_momentum_pct > 0 ? "+" : ""}${r.avg_momentum_pct.toFixed(1)}%`
-                  : "—"}
-              </span>
-            </div>
-            {/* Activity bar */}
-            <div
-              style={{
-                height: "3px",
-                background: "var(--color-border-subtle)",
-                position: "relative",
-              }}
-            >
-              <div
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  top: 0,
-                  height: "100%",
-                  width: `${Math.min(100, (r.tx_count / maxCount) * 100)}%`,
-                  background: "var(--color-accent)",
-                }}
-              />
-            </div>
-            <div
-              style={{
-                marginTop: "3px",
-                fontSize: "9px",
-                color: "var(--color-text-tertiary)",
-                display: "flex",
-                justifyContent: "space-between",
-              }}
-            >
-              <span>{r.tx_count} tx</span>
-              {r.avg_price_per_sqm != null && (
-                <span>SAR {r.avg_price_per_sqm.toFixed(0)}/sqm</span>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Right rail — Evaluation panel ─────────────────────────────────────────────
-
-function EvalPanel({
-  site,
-  adHocGeom,
-  onClear,
-  onPoiHover,
-}: {
-  site: SavedSite | null;
-  adHocGeom: string | null;
-  onClear: () => void;
-  onPoiHover: (cat: string | null) => void;
-}) {
-  const [loading, setLoading] = useState(false);
-  const [sections, setSections] = useState<EvalSection[]>([]);
-  const [radiusM, setRadiusM] = useState(5000);
-  const [timeDays, setTimeDays] = useState(90);
-
-  // Auto-run when adHocGeom changes (map click)
-  useEffect(() => {
-    if (adHocGeom && !site) {
-      void runEvalWithGeom(adHocGeom, null);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adHocGeom]);
-
-  async function runEvalWithGeom(geomWkt: string, assetClass: string | null) {
-    setLoading(true);
-    setSections([]);
-    try {
-      const r = await fetch(`${API_BASE}/spatial/evaluate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...authHeaders(),
-        },
-        body: JSON.stringify({
-          geometry_wkt: geomWkt,
-          radius_m: radiusM,
-          time_window_days: timeDays,
-          ...(assetClass ? { asset_class: assetClass } : {}),
-        }),
-      });
-
-      if (!r.ok || !r.body) {
-        setSections([{ section: "error", data: { message: "Request failed" } }]);
-        return;
-      }
-
-      const reader = r.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() ?? "";
-        for (const chunk of lines) {
-          const line = chunk.replace(/^data: /, "").trim();
-          if (!line) continue;
-          try {
-            const ev: EvalSection = JSON.parse(line);
-            if (ev.section !== "done") {
-              // Upsert by section name — prevents duplicate keys if a section
-              // is re-sent (e.g. React StrictMode double-invoke).
-              setSections((prev) => {
-                const idx = prev.findIndex((s) => s.section === ev.section);
-                if (idx >= 0) {
-                  const next = [...prev];
-                  next[idx] = ev;
-                  return next;
-                }
-                return [...prev, ev];
-              });
-            }
-          } catch {
-            // skip malformed
-          }
-        }
-      }
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function runEval() {
-    let geomWkt: string;
-    let assetClass: string | null = null;
-
-    if (site) {
-      let geom = site.geometry_geojson;
-      try {
-        const parsed = JSON.parse(geom);
-        if (parsed.type === "Point") {
-          const [lon, lat] = parsed.coordinates;
-          geom = `POINT(${lon} ${lat})`;
-        }
-      } catch {
-        // leave as-is
-      }
-      geomWkt = geom;
-      assetClass = site.asset_class ?? null;
-    } else if (adHocGeom) {
-      geomWkt = adHocGeom;
-    } else {
-      return;
-    }
-
-    await runEvalWithGeom(geomWkt, assetClass);
-  }
-
-  return (
-    <div
-      style={{
-        width: "360px",
-        flexShrink: 0,
-        borderLeft: "1px solid var(--color-border-subtle)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
-      {/* Header */}
-      <div
-        style={{
-          padding: "12px 16px",
-          borderBottom: "1px solid var(--color-border-subtle)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <div>
-          <div
-            style={{
-              fontSize: "9px",
-              fontWeight: 600,
-              letterSpacing: "0.14em",
-              textTransform: "uppercase",
-              color: "var(--color-text-tertiary)",
-            }}
-          >
-            Evaluation
-          </div>
-          <div
-            style={{
-              fontSize: "12px",
-              color: "var(--color-text-primary)",
-              marginTop: "2px",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              maxWidth: "220px",
-            }}
-          >
-            {site?.name ?? "Ad-hoc evaluation"}
-          </div>
-        </div>
-        <button
-          onClick={onClear}
-          style={{
-            background: "transparent",
-            border: "none",
-            color: "var(--color-text-tertiary)",
-            cursor: "pointer",
-            fontSize: "14px",
-          }}
-        >
-          ×
-        </button>
-      </div>
-
-      {/* Controls */}
-      <div
-        style={{
-          padding: "10px 16px",
-          borderBottom: "1px solid var(--color-border-subtle)",
-          display: "flex",
-          gap: "8px",
-          alignItems: "flex-end",
-        }}
-      >
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Radius (m)</label>
-          <select
-            value={radiusM}
-            onChange={(e) => setRadiusM(Number(e.target.value))}
-            style={inputStyle}
-          >
-            <option value={1000}>1 km</option>
-            <option value={2000}>2 km</option>
-            <option value={5000}>5 km</option>
-            <option value={10000}>10 km</option>
-            <option value={20000}>20 km</option>
-          </select>
-        </div>
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Window</label>
-          <select
-            value={timeDays}
-            onChange={(e) => setTimeDays(Number(e.target.value))}
-            style={inputStyle}
-          >
-            <option value={30}>30 days</option>
-            <option value={90}>90 days</option>
-            <option value={180}>180 days</option>
-            <option value={365}>1 year</option>
-          </select>
-        </div>
-        <button
-          onClick={runEval}
-          disabled={loading}
-          style={{ ...btnStyle, flexShrink: 0 }}
-        >
-          {loading ? "Running…" : "Evaluate"}
-        </button>
-      </div>
-
-      {/* Results */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "16px" }}>
-        {sections.length === 0 && !loading && (
-          <div
-            style={{
-              fontSize: "11px",
-              color: "var(--color-text-tertiary)",
-            }}
-          >
-            Press Evaluate to run spatial analysis.
-          </div>
-        )}
-        {loading && sections.length === 0 && (
-          <div
-            style={{
-              fontSize: "11px",
-              color: "var(--color-text-tertiary)",
-            }}
-          >
-            Computing…
-          </div>
-        )}
-        {sections.map((s) => (
-          <EvalSectionCard key={s.section} section={s} onPoiHover={onPoiHover} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function EvalSectionCard({
-  section,
-  onPoiHover,
-}: {
-  section: EvalSection;
-  onPoiHover: (cat: string | null) => void;
-}) {
-  const titles: Record<string, string> = {
-    district: "District",
-    pois: "Points of Interest",
-    regulatory: "Regulatory Zones",
-    transactions: "Transaction Comparables",
-    listings: "Active Listings",
-    reit_properties: "REIT Properties",
-    typed_facts: "Intelligence Signal",
-    accessibility: "Accessibility",
-    macro_context: "Macro Context",
-    data_quality: "Data Quality",
-  };
-
-  const title = titles[section.section] ?? section.section;
-  const d = section.data;
-
-  return (
-    <div
-      style={{
-        marginBottom: "16px",
-        border: "1px solid var(--color-border-subtle)",
-        background: "var(--color-bg-surface)",
-      }}
-    >
-      <div
-        style={{
-          padding: "8px 12px",
-          borderBottom: "1px solid var(--color-border-subtle)",
-          fontSize: "9px",
-          fontWeight: 600,
-          letterSpacing: "0.12em",
-          textTransform: "uppercase",
-          color: "var(--color-text-secondary)",
-        }}
-      >
-        {title}
-      </div>
-      <div style={{ padding: "10px 12px" }}>
-        {section.section === "district" && <DistrictCard d={d} />}
-        {section.section === "pois" && <POIsCard d={d} onPoiHover={onPoiHover} />}
-        {section.section === "regulatory" && <RegulatoryCard d={d} />}
-        {section.section === "transactions" && <StatsCard d={d} prefix="tx" />}
-        {section.section === "listings" && <StatsCard d={d} prefix="lst" />}
-        {section.section === "reit_properties" && <REITCard d={d} />}
-        {section.section === "typed_facts" && <TypedFactsCard d={d} />}
-        {section.section === "accessibility" && <AccessibilityCard d={d} />}
-        {section.section === "macro_context" && <MacroContextCard d={d} />}
-        {section.section === "data_quality" && <DataQualityCard d={d} />}
-      </div>
-    </div>
-  );
-}
-
-function DistrictCard({ d }: { d: Record<string, unknown> }) {
-  if (!d.found)
-    return (
-      <div style={noDataStyle}>Outside known district boundaries</div>
-    );
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-      <Row label="Name" value={String(d.name_en ?? "—")} />
-      {d.name_ar ? <Row label="Arabic" value={String(d.name_ar)} /> : null}
-      {d.city ? <Row label="City" value={String(d.city)} /> : null}
-      {d.region ? <Row label="Region" value={String(d.region)} /> : null}
-    </div>
-  );
-}
-
-function POIsCard({
-  d,
-  onPoiHover,
-}: {
-  d: Record<string, unknown>;
-  onPoiHover: (cat: string | null) => void;
-}) {
-  const cats = (d.by_category ?? []) as Array<{
-    category: string;
-    count: number;
-  }>;
-  return (
-    <div>
-      <div style={{ fontSize: "11px", color: "var(--color-text-secondary)", marginBottom: "8px" }}>
-        {String(d.total ?? 0)} POIs within {String(d.radius_m ?? "")}m
-      </div>
-      {cats.slice(0, 10).map((c) => (
-        <div
-          key={c.category}
-          onMouseEnter={() => onPoiHover(c.category)}
-          onMouseLeave={() => onPoiHover(null)}
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            fontSize: "10px",
-            color: "var(--color-text-secondary)",
-            padding: "3px 4px",
-            cursor: "default",
-            gap: "6px",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-            <div
-              style={{
-                width: "6px",
-                height: "6px",
-                borderRadius: "50%",
-                background: poiColor(c.category),
-                flexShrink: 0,
-              }}
-            />
-            <span style={{ color: "var(--color-text-tertiary)" }}>{c.category}</span>
-          </div>
-          <span style={{ fontVariantNumeric: "tabular-nums" }}>{c.count}</span>
-        </div>
-      ))}
-      {cats.length === 0 && <div style={noDataStyle}>No POIs found</div>}
-    </div>
-  );
-}
-
-function RegulatoryCard({ d }: { d: Record<string, unknown> }) {
-  const zones = (d.zones ?? []) as Array<{
-    zone_type: string;
-    name_en: string;
-    effective_from?: string;
-    effective_to?: string;
-  }>;
-  if (zones.length === 0)
-    return <div style={noDataStyle}>No regulatory zones intersect this site</div>;
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-      {zones.map((z, i) => (
-        <div
-          key={i}
-          style={{
-            padding: "6px 8px",
-            background: "var(--color-accent-subtle)",
-            border: "1px solid var(--color-accent)",
-          }}
-        >
-          <div style={{ fontSize: "10px", color: "var(--color-accent-bright)" }}>
-            {z.zone_type}
-          </div>
-          <div style={{ fontSize: "11px", color: "var(--color-text-primary)", marginTop: "2px" }}>
-            {z.name_en}
-          </div>
-          {(z.effective_from || z.effective_to) && (
-            <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", marginTop: "2px" }}>
-              {z.effective_from ?? "—"} → {z.effective_to ?? "ongoing"}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function StatsCard({
-  d,
-}: {
-  d: Record<string, unknown>;
-  prefix: string;
-}) {
-  const fmt = (v: unknown) =>
-    v == null
-      ? "—"
-      : typeof v === "number"
-      ? v >= 1_000_000
-        ? `${(v / 1_000_000).toFixed(2)}M`
-        : v >= 1_000
-        ? `${(v / 1_000).toFixed(1)}K`
-        : String(v)
-      : String(v);
-
-  const count = d.count as number | undefined;
-  const isTransactions = d.time_window_days != null && d.avg_rent_sar_annual == null;
-  if (!count)
-    return (
-      <div style={noDataStyle}>
-        {isTransactions
-          ? "Limited transaction data available — awaiting REGA Open Data response (submitted 18 Apr 2026)"
-          : "No data within search parameters"}
-      </div>
-    );
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-      <Row label="Count" value={String(count)} />
-      {d.avg_price_sar != null && (
-        <Row label="Avg price" value={`SAR ${fmt(d.avg_price_sar)}`} />
-      )}
-      {d.avg_price_per_sqm != null && (
-        <Row label="Avg SAR/sqm" value={fmt(d.avg_price_per_sqm)} />
-      )}
-      {d.avg_rent_sar_annual != null && (
-        <Row label="Avg rent/yr" value={`SAR ${fmt(d.avg_rent_sar_annual)}`} />
-      )}
-      {d.avg_rent_per_sqm != null && (
-        <Row label="SAR/sqm/yr" value={fmt(d.avg_rent_per_sqm)} />
-      )}
-      {d.avg_area_sqm != null && (
-        <Row label="Avg area" value={`${fmt(d.avg_area_sqm)} sqm`} />
-      )}
-    </div>
-  );
-}
-
-function REITCard({ d }: { d: Record<string, unknown> }) {
-  const props = (d.properties ?? []) as Array<{
-    ticker: string;
-    property_name: string;
-    property_type?: string;
-    distance_m: number;
-    occupancy_pct?: number;
-  }>;
-  if (props.length === 0)
-    return <div style={noDataStyle}>No REIT properties found nearby</div>;
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-      {props.slice(0, 5).map((p, i) => (
-        <div
-          key={i}
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            fontSize: "10px",
-          }}
-        >
-          <span style={{ color: "var(--color-text-secondary)" }}>
-            [{p.ticker}] {p.property_name.slice(0, 28)}
-          </span>
-          <span style={{ color: "var(--color-text-tertiary)", fontVariantNumeric: "tabular-nums" }}>
-            {Math.round(p.distance_m)}m
-          </span>
-        </div>
-      ))}
-      {props.length > 5 && (
-        <div style={{ fontSize: "10px", color: "var(--color-text-tertiary)" }}>
-          +{props.length - 5} more
-        </div>
-      )}
-    </div>
-  );
-}
-
-const TABLE_SHORT: Record<string, string> = {
-  supply_events: "SUPPLY",
-  regulatory_events: "REG",
-  macro_signals: "MACRO",
-  demand_signals: "DEMAND",
-  capital_markets_events: "CAP",
-  infrastructure_events: "INFRA",
-  tenant_signals: "TENANT",
-  market_commentary: "CMMNT",
+const PLOT = {
+  label: "ul. Towarowa 28 — Wola",
+  kw: "WA1M/00521884/3",
+  address: "ul. Towarowa 28, 01-103 Warszawa",
+  area_m2: 1247,
+  district: "Wola",
+  fnSummary: "Residential MW (MPZP enacted) · 1,247 m² · Wola",
+  mpzp: {
+    name: "Czyste — Towarowa",
+    enacted: "12 Mar 2026",
+    fn: "MW — multi-family residential",
+    far: 5.5, height: 130, coverage: 70, greenery: 25, parking: 1.2, setback: 5,
+    quote: 'Plan miejscowy obszaru "Czyste — Towarowa" reaffirms 130 m max height for parcels fronting ul. Towarowa.',
+    cite: "Uchwała Rady m. st. Warszawy LXXII/2356/2026, 12 Mar 2026",
+  },
+  landComps: {
+    median: 3840, n: 14, total_m2: 38420,
+    top: [
+      { date: "08 Apr 2026", dist: 340,  area: 2840, pln_m2: 4120, mkt: "Primary"   },
+      { date: "22 Feb 2026", dist: 520,  area: 1640, pln_m2: 3980, mkt: "Primary"   },
+      { date: "14 Jan 2026", dist: 780,  area: 5210, pln_m2: 3650, mkt: "Secondary" },
+      { date: "09 Nov 2025", dist: 410,  area:  980, pln_m2: 4480, mkt: "Primary"   },
+      { date: "02 Sep 2025", dist: 920,  area: 3120, pln_m2: 3240, mkt: "Secondary" },
+    ],
+    scatter: [
+      { area: 2840, pln_m2: 4120 }, { area: 1640, pln_m2: 3980 }, { area: 5210, pln_m2: 3650 },
+      { area:  980, pln_m2: 4480 }, { area: 3120, pln_m2: 3240 }, { area: 1820, pln_m2: 3520 },
+      { area: 2440, pln_m2: 3920 }, { area:  740, pln_m2: 4280 }, { area: 6200, pln_m2: 3140 },
+      { area: 1280, pln_m2: 3680 },
+    ],
+  },
+  apt: {
+    primary_pln: 24180, primary_30d: 1.4,
+    secondary_pln: 19420, secondary_12m: 9.1,
+    series12m_primary:   [22600,22720,22890,23010,23150,23290,23410,23560,23720,23880,24020,24180],
+    series12m_secondary: [17800,17910,18020,18180,18320,18490,18640,18790,18920,19080,19240,19420],
+  },
+  supply: {
+    units_total: 2932, units_24m: 1428, avg_price: 23720,
+    projects: [
+      { dev: "Echo Investment", name: "Stacja Wola III",          dist_m:  280, units: 240, completion: "Q4 2026", pln: 21900, sold: 142, vel: 8.0 },
+      { dev: "Develia",         name: "Wola Libero",              dist_m:  640, units: 268, completion: "Q2 2027", pln: 24650, sold:  94, vel: 6.2 },
+      { dev: "Marvipol",        name: "Unisono Wola",             dist_m:  880, units: 412, completion: "Q1 2027", pln: 22900, sold: 286, vel:11.4 },
+      { dev: "Skanska Resi.",   name: "Holm House III",           dist_m: 1080, units: 184, completion: "Q3 2026", pln: 25400, sold: 148, vel: 9.2 },
+      { dev: "Atal",            name: "Atal Towarowa",            dist_m: 1320, units: 520, completion: "Q4 2027", pln: 22150, sold: 128, vel: 5.8 },
+      { dev: "Robyg",           name: "Wola Skyline",             dist_m: 1540, units: 308, completion: "Q1 2028", pln: 23280, sold:  42, vel: 4.4 },
+      { dev: "Dom Development", name: "Browary 12",               dist_m: 1720, units: 240, completion: "Q3 2027", pln: 25180, sold:  86, vel: 7.1 },
+      { dev: "Spravia",         name: "Apartamenty Kasprzaka",    dist_m: 1880, units: 760, completion: "Q2 2028", pln: 22640, sold:  38, vel: 3.8 },
+    ],
+  },
+  demo: {
+    pop: 140820, pop_5y: 4.2, pop_series: [135150,136420,137620,138940,140820],
+    age_25_44_pct: 38.6, warsaw_avg: 32.1,
+    income: 9420, income_3y: 18.4, income_warsaw: 8740, income_series: [7960,8240,8590,8910,9420],
+    dwellings_per_1000: 472, dwellings_warsaw: 514,
+  },
+  infra: {
+    metro: { name: "M2 · Płocka", dist_m: 340 },
+    tram: { name: "23 / 24 / 28", dist_m: 120 },
+    planned: [
+      { prj: "M3 line — Wola spur",              status: "Funded",          eta: "2031",    src: "MZA"     },
+      { prj: "S8 / Towarowa interchange upgrade", status: "In construction", eta: "Q4 2026", src: "GDDKiA"  },
+    ],
+    schools: 6, hospitals: 3,
+  },
+  intel: [
+    { ts: "08 Apr 26", t: "transaction", txt: "Allianz Real Estate completes Generation Park Y · €119m at 5.85% yield.",               src: "Eurobuild CEE",         conf: 5 },
+    { ts: "28 Mar 26", t: "listing",     txt: "Echo Investment opens sales for Stacja Wola III — guide PLN 23,900/m².",                src: "Property Forum",        conf: 5 },
+    { ts: "22 Mar 26", t: "regulatory",  txt: "WSA Warsaw upholds 'Czyste-Towarowa' MPZP — 130m ceiling final.",                       src: "Rzeczpospolita · NRC",  conf: 5 },
+    { ts: "14 Mar 26", t: "sentiment",   txt: "Marvipol reports 286 of 412 units sold at Unisono Wola (69% absorption).",              src: "Bankier",               conf: 4 },
+    { ts: "06 Mar 26", t: "macro",       txt: "NBP holds reference rate at 5.25% for fourth consecutive meeting.",                      src: "NBP",                   conf: 5 },
+  ],
 };
 
-function TypedFactsCard({ d }: { d: Record<string, unknown> }) {
-  const facts = (d.facts ?? []) as Array<{
-    id: number;
-    table: string;
-    created_at: string | null;
-    confidence: number | null;
-    source_citation: string | null;
-    summary: string | null;
-  }>;
-  const count = (d.count as number) ?? 0;
-  if (count === 0)
-    return <div style={noDataStyle}>No intelligence signal found for this district</div>;
+const PLOT_B = {
+  label: "Białołęka greenfield · 14 ha",
+  kw: "WA1B/00128710/4",
+  address: "ul. Modlińska / Płochocińska, Białołęka",
+  area_m2: 140000, district: "Białołęka",
+  fnSummary: "MN/MW (WZ pending) · 14.0 ha · Białołęka",
+  mpzp: { name: "None — WZ in process", fn: "MN / MW residential", far: 1.4, height: 18, status: "warn" as const },
+  landMedian: 1840, landN: 8,
+  apt: { primary: 13400, yoy: 5.8 },
+  supplyUnits: 2720, supplyDist: 1.8,
+  demo: { pop: 139000, pop_5y: 12.4, age2544: 31.2, income: 8420 },
+  metro: "M3 (planned, ETA 2031)", metroDist: 1400,
+  signal: "Long-dated greenfield. Pricing 5× cheaper than Wola plot but no MPZP and weaker exit price.",
+};
 
+const PLOT_A_LITE = {
+  label: "ul. Towarowa 28 — Wola",
+  kw: "WA1M/00521884/3",
+  address: "ul. Towarowa 28, 01-103 Warszawa",
+  area_m2: 1247, district: "Wola",
+  fnSummary: "MW (MPZP enacted) · 1,247 m² · Wola",
+  mpzp: { name: "Czyste — Towarowa", fn: "MW", far: 5.5, height: 130, status: "ok" as const },
+  landMedian: 3840, landN: 14,
+  apt: { primary: 24180, yoy: 14.8 },
+  supplyUnits: 2840, supplyDist: 2.0,
+  demo: { pop: 140820, pop_5y: 4.2, age2544: 38.6, income: 9420 },
+  metro: "M2 · Płocka", metroDist: 340,
+  signal: "Short-cycle infill. Premium PUM, fully entitled, but priced in.",
+};
+
+// ── Mini chart helpers ─────────────────────────────────────────────────────────
+
+function SparkLine({ data, color = "var(--brand-navy)", w = 70, h = 18 }: { data: number[]; color?: string; w?: number; h?: number }) {
+  const mn = Math.min(...data), mx = Math.max(...data), r = mx - mn || 1;
+  const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - mn) / r) * h}`).join(" ");
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-      {facts.map((f) => (
-        <div
-          key={`${f.table}-${f.id}`}
-          style={{
-            borderLeft: "2px solid var(--color-border-subtle)",
-            paddingLeft: "8px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "2px",
-          }}
-        >
-          <div style={{ display: "flex", gap: "6px", alignItems: "baseline" }}>
-            <span style={{
-              fontSize: "8px",
-              fontFamily: "var(--font-mono)",
-              fontWeight: 600,
-              color: "var(--color-text-tertiary)",
-              letterSpacing: "0.1em",
-            }}>
-              {TABLE_SHORT[f.table] ?? f.table.toUpperCase()}
-            </span>
-            {f.confidence != null && (
-              <span style={{
-                fontSize: "8px",
-                color: f.confidence >= 5 ? "#059669" : "#d97706",
-                fontFamily: "var(--font-mono)",
-              }}>
-                c{f.confidence}
-              </span>
-            )}
-            {f.created_at && (
-              <span style={{ fontSize: "8px", color: "var(--color-text-tertiary)" }}>
-                {new Date(f.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
-              </span>
-            )}
-          </div>
-          {f.summary && (
-            <div style={{ fontSize: "10px", color: "var(--color-text-secondary)", lineHeight: "1.3" }}>
-              {f.summary}
-            </div>
-          )}
-          {f.source_citation && (
-            <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", fontStyle: "italic" }}>
-              "{f.source_citation.slice(0, 100)}{f.source_citation.length > 100 ? "…" : ""}"
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
+    <svg width={w} height={h} style={{ display: "inline-block", verticalAlign: "middle", marginLeft: 6 }}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.4" />
+    </svg>
   );
 }
 
-function AccessibilityCard({ d }: { d: Record<string, unknown> }) {
-  if (!d.available) {
-    const refs = (d.refs ?? []) as Array<{ key: string; label: string; minutes: null }>;
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-        <div style={{ fontSize: "10px", color: "var(--color-text-tertiary)", fontStyle: "italic", marginBottom: "4px" }}>
-          {typeof d.error === "string" ? d.error : "Accessibility data temporarily unavailable."}
-        </div>
-        {refs.map((r) => (
-          <div key={r.key} style={{ display: "flex", justifyContent: "space-between" }}>
-            <span style={{ fontSize: "10px", color: "var(--color-text-tertiary)" }}>{r.label}</span>
-            <span style={{ fontSize: "10px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>--</span>
-          </div>
-        ))}
-      </div>
-    );
-  }
-  const refs = (d.refs ?? []) as Array<{ key: string; label: string; minutes: number | null }>;
+function DualLine({ a, b, h = 70 }: { a: number[]; b: number[]; h?: number }) {
+  const W = 420;
+  const all = [...a, ...b]; const mn = Math.min(...all), mx = Math.max(...all); const r = mx - mn || 1;
+  const ptsA = a.map((v, i) => `${(i / (a.length - 1)) * W},${h - ((v - mn) / r) * h}`).join(" ");
+  const ptsB = b.map((v, i) => `${(i / (b.length - 1)) * W},${h - ((v - mn) / r) * h}`).join(" ");
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-      <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "2px" }}>
-        HGV drive-time
-      </div>
-      {refs.map((r) => (
-        <div key={r.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "8px" }}>
-          <span style={{ fontSize: "10px", color: "var(--color-text-secondary)", flex: 1, minWidth: 0 }}>{r.label}</span>
-          <span
-            style={{
-              fontSize: "11px",
-              fontFamily: "var(--font-mono)",
-              fontWeight: 600,
-              color: r.minutes != null && r.minutes <= 30
-                ? "var(--color-accent-bright)"
-                : "var(--color-text-primary)",
-              flexShrink: 0,
-            }}
-          >
-            {r.minutes != null ? `${r.minutes} min` : "N/A"}
-          </span>
-        </div>
-      ))}
-    </div>
+    <svg viewBox={`0 0 ${W} ${h}`} preserveAspectRatio="none" width="100%" height={h} style={{ display: "block" }}>
+      <polyline points={ptsA} fill="none" stroke="var(--brand-navy)" strokeWidth="1.5" />
+      <polyline points={ptsB} fill="none" stroke="var(--brand-blue-2)" strokeWidth="1.5" strokeDasharray="3 2" />
+    </svg>
   );
 }
 
-function MacroContextCard({ d }: { d: Record<string, unknown> }) {
-  if (d.available) {
-    const indicators = (d.indicators ?? []) as Array<{
-      name: string; value: number; unit: string; period: string | null; source: string;
-    }>;
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-        {indicators.map((ind) => (
-          <div key={ind.name} style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
-            <Row label={ind.name} value={`${ind.value} ${ind.unit}`} />
-            {ind.period && (
-              <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", textAlign: "right" }}>
-                {ind.period} · {ind.source}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  }
-  // Static reference placeholder
-  const ref = d.static_reference as Record<string, unknown> | undefined;
+function CompsScatter() {
+  const W = 420, H = 120, pad = 22;
+  const data = PLOT.landComps.scatter;
+  const minP = 2800, maxP = 4800;
+  const x = (i: number) => pad + (i / (data.length - 1)) * (W - pad * 2);
+  const y = (v: number) => H - pad - ((v - minP) / (maxP - minP)) * (H - pad * 2);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-      {ref && (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
+      {[3000, 3500, 4000, 4500].map(v => (
+        <g key={v}>
+          <line x1={pad} x2={W - pad} y1={y(v)} y2={y(v)} stroke="#F0F0F0" />
+          <text x={2} y={y(v) + 3} fontSize="9" fill="var(--text-tertiary)" fontFamily="IBM Plex Mono">{(v / 1000).toFixed(1)}k</text>
+        </g>
+      ))}
+      <line x1={pad} x2={W - pad} y1={y(PLOT.landComps.median)} y2={y(PLOT.landComps.median)} stroke="var(--brand-navy)" strokeWidth="1" strokeDasharray="2 2" />
+      <text x={W - pad - 1} y={y(PLOT.landComps.median) - 3} fontSize="9" fill="var(--brand-navy)" textAnchor="end">median 3.84k</text>
+      {data.map((d, i) => (
+        <circle key={i} cx={x(i)} cy={y(d.pln_m2)} r={Math.sqrt(d.area) / 12}
+          fill="var(--brand-navy)" fillOpacity="0.35" stroke="var(--brand-navy)" strokeWidth="0.6" />
+      ))}
+    </svg>
+  );
+}
+
+// ── KV component ──────────────────────────────────────────────────────────────
+
+function KV({ rows }: { rows: [string, React.ReactNode, string?][] }) {
+  return (
+    <div className="kv">
+      {rows.map(([k, v, cls], i) => (
         <>
-          <Row
-            label="SAMA repo rate"
-            value={`${String(ref.sama_repo_rate_pct)}% (${String(ref.as_of)})`}
-          />
-          {ref.walt_implication && (
-            <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", lineHeight: 1.4 }}>
-              {String(ref.walt_implication)}
-            </div>
-          )}
-          <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", fontStyle: "italic" }}>
-            {String(ref.source ?? "")}
-          </div>
+          <div key={"k" + i} className="k">{k}</div>
+          <div key={"v" + i} className={"v " + (cls ?? "")}>{v}</div>
         </>
-      )}
-    </div>
-  );
-}
-
-function DataQualityCard({ d }: { d: Record<string, unknown> }) {
-  const sources = (d.sources ?? []) as Array<{
-    name: string; provider: string; last_updated: string | null; status: string; note?: string;
-  }>;
-  const gaps = (d.gaps ?? []) as string[];
-  const statusColor = (s: string) => {
-    if (s === "ok") return "var(--color-positive)";
-    if (s === "pending" || s === "manual") return "var(--color-accent)";
-    return "var(--color-negative)";
-  };
-  return (
-    <div>
-      <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", marginBottom: "6px" }}>
-        As of {String(d.as_of ?? "—")} · {String(d.radius_m ?? "—")}m radius
-      </div>
-      {sources.map((src) => (
-        <div
-          key={src.name}
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: "6px",
-            padding: "3px 0",
-            borderBottom: "1px solid var(--color-border-subtle)",
-          }}
-        >
-          <div
-            style={{
-              width: "6px",
-              height: "6px",
-              borderRadius: "50%",
-              background: statusColor(src.status),
-              flexShrink: 0,
-              marginTop: "3px",
-            }}
-          />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: "10px", color: "var(--color-text-secondary)" }}>{src.name}</div>
-            <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)" }}>
-              {src.provider}
-              {src.last_updated ? ` · ${src.last_updated}` : ""}
-            </div>
-            {src.note && (
-              <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", fontStyle: "italic" }}>
-                {src.note}
-              </div>
-            )}
-          </div>
-        </div>
       ))}
-      {gaps.length > 0 && (
-        <div style={{ marginTop: "8px", fontSize: "9px", color: "var(--color-accent)", fontStyle: "italic" }}>
-          Gaps: {gaps.join(", ")}
-        </div>
-      )}
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+// ── Section header ────────────────────────────────────────────────────────────
+
+function SectionHd({ letter, title, subtitle }: { letter: string; title: string; subtitle?: string }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        fontSize: "10px",
-      }}
-    >
-      <span style={{ color: "var(--color-text-tertiary)" }}>{label}</span>
-      <span
-        style={{
-          color: "var(--color-text-secondary)",
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {value}
-      </span>
+    <div className="pe-hd">
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", letterSpacing: "0.5px" }}>{letter}</span>
+        <span className="ws-upper">{title}</span>
+      </div>
+      {subtitle && <div className="pe-sub">{subtitle}</div>}
     </div>
   );
 }
 
-// ── Shared micro-styles ───────────────────────────────────────────────────────
+// ── Conf dots ─────────────────────────────────────────────────────────────────
 
-const inputStyle: React.CSSProperties = {
-  background: "var(--color-bg-input)",
-  border: "1px solid var(--color-border-default)",
-  color: "var(--color-text-primary)",
-  fontFamily: "var(--font-mono)",
-  fontSize: "10px",
-  padding: "4px 6px",
-  width: "100%",
-  outline: "none",
-  boxSizing: "border-box",
-};
-
-const btnStyle: React.CSSProperties = {
-  background: "var(--color-accent-subtle)",
-  border: "1px solid var(--color-accent)",
-  color: "var(--color-accent-bright)",
-  fontFamily: "var(--font-mono)",
-  fontSize: "10px",
-  letterSpacing: "0.08em",
-  padding: "5px 10px",
-  cursor: "pointer",
-  textTransform: "uppercase",
-};
-
-const labelStyle: React.CSSProperties = {
-  fontSize: "9px",
-  color: "var(--color-text-tertiary)",
-  letterSpacing: "0.1em",
-  textTransform: "uppercase",
-  display: "block",
-  marginBottom: "3px",
-};
-
-const noDataStyle: React.CSSProperties = {
-  fontSize: "10px",
-  color: "var(--color-text-tertiary)",
-  fontStyle: "italic",
-};
-
-// ── Map center — Warsaw ────────────────────────────────────────────────────────
-
-const WARSAW_CENTER = { lng: 21.017, lat: 52.237 };
-
-// ── Main WorkbenchPage ────────────────────────────────────────────────────────
-
-// ── Layer toggle state ────────────────────────────────────────────────────────
-
-interface LayerToggles {
-  districts: boolean;
-  velocity: boolean;
-  pois: boolean;
-  regulatory: boolean;
-  isochrone: boolean;
+function ConfDots({ n }: { n: number }) {
+  return (
+    <span style={{ display: "inline-flex", gap: 2, verticalAlign: "middle" }}>
+      {[1, 2, 3, 4, 5].map(i => (
+        <span key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: i <= n ? "var(--brand-navy)" : "var(--border)" }} />
+      ))}
+    </span>
+  );
 }
 
-// POI taxonomy: category → subcategories (matches overpass.py CATEGORIES)
-const POI_TAXONOMY: Record<string, string[]> = {
-  transportation: ["fuel", "parking", "bus", "car_dealer"],
-  industrial:     ["warehouse", "data_centre"],
-  commercial:     ["mall", "supermarket", "hotel", "restaurant", "cafe", "office_bld", "cowork", "bank", "atm"],
-  amenity:        ["hospital", "clinic", "pharmacy", "dental", "gym", "pool", "park", "stadium", "mosque", "cinema", "theatre", "museum", "library"],
-  education:      ["nursery", "school", "intl_school", "university"],
-  government:     ["govt", "modon", "police", "fire", "post", "embassy"],
-  infrastructure: ["power_substation", "water_tower"],
-};
+// ── Underwriting (Section I) ──────────────────────────────────────────────────
 
-// Amenity subcategory groups (for UI separators)
-const AMENITY_GROUPS: Record<string, string[]> = {
-  health:           ["hospital", "clinic", "pharmacy", "dental"],
-  recreation:       ["gym", "pool", "park", "stadium"],
-  culture_religion: ["mosque", "cinema", "theatre", "museum", "library"],
-};
+function Underwriting() {
+  const [buildCost] = useState(5500);
+  const [irr] = useState(18);
+  const [ltv] = useState(65);
+  const [growth] = useState(3);
+  const [duration] = useState(24);
 
-// Default ON: transportation, industrial, education
-function defaultPoiState(): Record<string, boolean> {
-  const on = new Set(["transportation", "industrial", "education"]);
-  const state: Record<string, boolean> = {};
-  for (const [cat, subs] of Object.entries(POI_TAXONOMY)) {
-    for (const sub of subs) state[`${cat}/${sub}`] = on.has(cat);
+  const area = PLOT.area_m2;
+  const far = PLOT.mpzp.far;
+  const pum = area * far;
+  const exit = PLOT.apt.primary_pln * Math.pow(1 + growth / 100, 2);
+  const gdv = pum * exit / 1_000_000;
+  const cost_build = pum * buildCost / 1_000_000;
+  const cost_soft = cost_build * 0.15;
+  const debt = (cost_build + cost_soft) * (ltv / 100);
+  const finCost = debt * 0.0835 * 1.5;
+  const totalCost = cost_build + cost_soft + finCost;
+  const targetMargin = 1 + irr / 100;
+  const residual = Math.max(0, gdv - totalCost * targetMargin);
+  const residual_pln_m2 = residual * 1_000_000 / area;
+
+  const fmtM = (v: number) => v.toLocaleString("pl-PL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const fmtInt = (v: number) => Math.round(v).toLocaleString("pl-PL");
+
+  function corner(pd: number, cd: number) {
+    const g = pum * exit * (1 + pd) / 1_000_000;
+    const c = (cost_build + cost_soft) * (1 + cd) + finCost;
+    const r = g - c * targetMargin;
+    return r > 0 ? r * 1_000_000 / area : 0;
   }
-  return state;
-}
+  const c_HP_LC = corner(+0.05, -0.10);
+  const c_HP_HC = corner(+0.05, +0.10);
+  const c_LP_LC = corner(-0.05, -0.10);
+  const c_LP_HC = corner(-0.05, +0.10);
 
-// Category colors
-const POI_CAT_COLORS: Record<string, string> = {
-  transportation: "#E8B84A",
-  industrial:     "#C9922A",
-  commercial:     "#8A7B9A",
-  amenity:        "#A07B5E",
-  education:      "#5A8A7A",
-  government:     "#7B9EA7",
-  infrastructure: "#6A6A6A",
-};
+  function SensCell({ v, tone }: { v: number; tone?: "good" | "bad" }) {
+    const bg = tone === "good" ? "#ECF2EC" : tone === "bad" ? "#F2ECEC" : "#FAFAFA";
+    const c = tone === "good" ? "var(--up)" : tone === "bad" ? "var(--down)" : "var(--text-primary)";
+    return (
+      <div style={{ background: bg, color: c, padding: "10px 12px", border: "1px solid var(--border)" }}>
+        <div style={{ fontSize: 14, fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{fmtInt(v)}</div>
+      </div>
+    );
+  }
 
-function poiColor(category: string): string {
-  return POI_CAT_COLORS[category] ?? "#888";
-}
-
-// Derive whether all/some/none subcategories of a category are active
-function catToggleState(cat: string, state: Record<string, boolean>): "all" | "some" | "none" {
-  const subs = POI_TAXONOMY[cat] ?? [];
-  const count = subs.filter((s) => state[`${cat}/${s}`]).length;
-  if (count === subs.length) return "all";
-  if (count === 0) return "none";
-  return "some";
-}
-
-// ── Layer control strip ───────────────────────────────────────────────────────
-
-function LayerControls({
-  toggles,
-  onChange,
-  poiState,
-  onPoiSubcat,
-  onPoiCat,
-  drawMode,
-  onDrawMode,
-  velocityWindow,
-  onVelocityWindow,
-  velocityAssetClass,
-  onVelocityAssetClass,
-  isoProfile,
-  onIsoProfile,
-  isoError,
-}: {
-  toggles: LayerToggles;
-  onChange: (k: keyof LayerToggles, v: boolean) => void;
-  poiState: Record<string, boolean>;
-  onPoiSubcat: (key: string, v: boolean) => void;
-  onPoiCat: (cat: string, v: boolean) => void;
-  drawMode: boolean;
-  onDrawMode: (v: boolean) => void;
-  velocityWindow: number;
-  onVelocityWindow: (d: number) => void;
-  velocityAssetClass: string;
-  onVelocityAssetClass: (c: string) => void;
-  isoProfile: "driving-hgv" | "driving-car";
-  onIsoProfile: (p: "driving-hgv" | "driving-car") => void;
-  isoError: string | null;
-}) {
-  const [poiExpanded, setPoiExpanded] = useState(false);
-  const [velocityExpanded, setVelocityExpanded] = useState(false);
-  const [isoExpanded, setIsoExpanded] = useState(false);
-  const [openCats, setOpenCats] = useState<Record<string, boolean>>({});
-
-  const toggleBtn = (
-    active: boolean,
-    label: string,
-    onClick: () => void,
-  ) => (
-    <button
-      onClick={onClick}
-      style={{
-        background: active ? "rgba(201,146,42,0.9)" : "rgba(20,19,16,0.85)",
-        border: "1px solid var(--color-border-default)",
-        color: active ? "var(--color-bg-canvas)" : "var(--color-text-tertiary)",
-        fontFamily: "var(--font-mono)",
-        fontSize: "9px",
-        letterSpacing: "0.1em",
-        padding: "4px 8px",
-        cursor: "pointer",
-        textTransform: "uppercase",
-        textAlign: "left",
-        minWidth: "90px",
-      }}
-    >
-      {label}
-    </button>
-  );
+  function InputRow({ label, sub, value }: { label: string; sub?: string; value: string | number }) {
+    return (
+      <div className="pe-uw-input-row">
+        <div className="pe-uw-input-l">
+          <div className="l1">{label}</div>
+          {sub && <div className="l2">{sub}</div>}
+        </div>
+        <div className="pe-uw-input-v tnum">
+          <span>{value}</span>
+          <span className="pe-uw-pencil" aria-hidden="true">✎</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        top: "12px",
-        left: "12px",
-        zIndex: 2,
-        display: "flex",
-        flexDirection: "column",
-        gap: "4px",
-      }}
-    >
-      {toggleBtn(toggles.districts, "Districts", () => onChange("districts", !toggles.districts))}
-
-      {/* Velocity heatmap toggle with controls */}
-      <div>
-        <div style={{ display: "flex", gap: "2px" }}>
-          {toggleBtn(toggles.velocity, "Velocity", () => onChange("velocity", !toggles.velocity))}
-          <button
-            onClick={() => setVelocityExpanded((v) => !v)}
-            style={{
-              background: "rgba(20,19,16,0.85)",
-              border: "1px solid var(--color-border-default)",
-              color: "var(--color-text-tertiary)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "9px",
-              padding: "4px 6px",
-              cursor: "pointer",
-            }}
-            title="Velocity options"
-          >
-            {velocityExpanded ? "▲" : "▼"}
-          </button>
-        </div>
-        {velocityExpanded && (
-          <div
-            style={{
-              background: "rgba(20,19,16,0.9)",
-              border: "1px solid var(--color-border-default)",
-              padding: "6px 8px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "5px",
-              marginTop: "2px",
-            }}
-          >
-            <div style={{ fontSize: "8px", color: "var(--color-text-tertiary)", letterSpacing: "0.1em", textTransform: "uppercase" }}>Window</div>
-            <div style={{ display: "flex", gap: "3px" }}>
-              {[30, 90, 365].map((d) => (
-                <button
-                  key={d}
-                  onClick={() => onVelocityWindow(d)}
-                  style={{
-                    background: velocityWindow === d ? "rgba(201,146,42,0.7)" : "rgba(20,19,16,0.7)",
-                    border: "1px solid var(--color-border-default)",
-                    color: velocityWindow === d ? "var(--color-bg-canvas)" : "var(--color-text-tertiary)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "8px",
-                    padding: "2px 5px",
-                    cursor: "pointer",
-                  }}
-                >
-                  {d === 365 ? "365d" : `${d}d`}
-                </button>
-              ))}
-            </div>
-            <div style={{ fontSize: "8px", color: "var(--color-text-tertiary)", letterSpacing: "0.1em", textTransform: "uppercase", marginTop: "2px" }}>Asset class</div>
-            <select
-              value={velocityAssetClass}
-              onChange={(e) => onVelocityAssetClass(e.target.value)}
-              style={{
-                background: "rgba(20,19,16,0.7)",
-                border: "1px solid var(--color-border-default)",
-                color: "var(--color-text-secondary)",
-                fontFamily: "var(--font-mono)",
-                fontSize: "8px",
-                padding: "2px 4px",
-                width: "100%",
-              }}
-            >
-              <option value="">All</option>
-              <option value="warehouse">Warehouse</option>
-              <option value="factory">Factory</option>
-              <option value="office">Office</option>
-              <option value="retail">Retail</option>
-              <option value="residential">Residential</option>
-            </select>
+    <div className="pe-section pe-uw">
+      <SectionHd letter="I" title="Underwriting Snapshot" subtitle="Screening only · not full underwrite" />
+      <div className="pe-uw-grid">
+        <div className="pe-uw-out">
+          <div className="pe-uw-out-block">
+            <div className="pe-uw-out-label">Estimated GDV</div>
+            <div className="pe-uw-out-gdv tnum">PLN {fmtM(gdv)}M</div>
           </div>
-        )}
-      </div>
-
-      {/* POI toggle with collapsible category tree */}
-      <div>
-        <div style={{ display: "flex", gap: "2px" }}>
-          {toggleBtn(toggles.pois, "POIs", () => onChange("pois", !toggles.pois))}
-          <button
-            onClick={() => setPoiExpanded((v) => !v)}
-            style={{
-              background: "rgba(20,19,16,0.85)",
-              border: "1px solid var(--color-border-default)",
-              color: "var(--color-text-tertiary)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "9px",
-              padding: "4px 6px",
-              cursor: "pointer",
-            }}
-            title="Toggle per-category"
-          >
-            {poiExpanded ? "▲" : "▼"}
-          </button>
-        </div>
-        {poiExpanded && (
-          <div
-            style={{
-              background: "rgba(20,19,16,0.9)",
-              border: "1px solid var(--color-border-default)",
-              padding: "6px 8px",
-              marginTop: "2px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "2px",
-            }}
-          >
-            {Object.keys(POI_TAXONOMY).map((cat) => {
-              const ts = catToggleState(cat, poiState);
-              const catOpen = openCats[cat] ?? false;
-              const subs = POI_TAXONOMY[cat]!;
-              const amenityGroups = cat === "amenity" ? AMENITY_GROUPS : null;
-              return (
-                <div key={cat}>
-                  {/* Category row */}
-                  <div style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "1px" }}>
-                    <input
-                      type="checkbox"
-                      ref={(el) => {
-                        if (el) el.indeterminate = ts === "some";
-                      }}
-                      checked={ts === "all"}
-                      onChange={(e) => onPoiCat(cat, e.target.checked)}
-                      style={{ accentColor: poiColor(cat), margin: 0, flexShrink: 0 }}
-                    />
-                    <div
-                      style={{
-                        width: "6px",
-                        height: "6px",
-                        borderRadius: "50%",
-                        background: poiColor(cat),
-                        flexShrink: 0,
-                      }}
-                    />
-                    <span
-                      style={{
-                        fontSize: "9px",
-                        fontFamily: "var(--font-mono)",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.08em",
-                        color: ts !== "none" ? "var(--color-text-secondary)" : "var(--color-text-tertiary)",
-                        flex: 1,
-                        cursor: "pointer",
-                        userSelect: "none",
-                      }}
-                      onClick={() => setOpenCats((prev) => ({ ...prev, [cat]: !(prev[cat] ?? false) }))}
-                    >
-                      {cat}
-                    </span>
-                    <button
-                      onClick={() => setOpenCats((prev) => ({ ...prev, [cat]: !(prev[cat] ?? false) }))}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "var(--color-text-tertiary)",
-                        fontSize: "8px",
-                        padding: "0 2px",
-                        cursor: "pointer",
-                        lineHeight: 1,
-                      }}
-                    >
-                      {catOpen ? "▲" : "▼"}
-                    </button>
-                  </div>
-                  {/* Subcategory rows */}
-                  {catOpen && (
-                    <div style={{ paddingLeft: "16px", display: "flex", flexDirection: "column", gap: "2px", marginBottom: "4px" }}>
-                      {amenityGroups
-                        ? Object.entries(amenityGroups).map(([group, groupSubs], gi) => (
-                          <div key={group}>
-                            {gi > 0 && (
-                              <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", margin: "3px 0" }} />
-                            )}
-                            <div style={{ fontSize: "8px", color: "var(--color-text-tertiary)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "2px", fontFamily: "var(--font-mono)" }}>
-                              {group.replace("_", " ")}
-                            </div>
-                            {groupSubs.map((sub) => (
-                              <label key={sub} style={{ display: "flex", alignItems: "center", gap: "5px", cursor: "pointer" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={poiState[`${cat}/${sub}`] ?? false}
-                                  onChange={(e) => onPoiSubcat(`${cat}/${sub}`, e.target.checked)}
-                                  style={{ accentColor: poiColor(cat), margin: 0 }}
-                                />
-                                <span style={{ fontSize: "9px", fontFamily: "var(--font-mono)", color: poiState[`${cat}/${sub}`] ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>
-                                  {sub.replace(/_/g, " ")}
-                                </span>
-                              </label>
-                            ))}
-                          </div>
-                        ))
-                        : subs.map((sub) => (
-                          <label key={sub} style={{ display: "flex", alignItems: "center", gap: "5px", cursor: "pointer" }}>
-                            <input
-                              type="checkbox"
-                              checked={poiState[`${cat}/${sub}`] ?? false}
-                              onChange={(e) => onPoiSubcat(`${cat}/${sub}`, e.target.checked)}
-                              style={{ accentColor: poiColor(cat), margin: 0 }}
-                            />
-                            <span style={{ fontSize: "9px", fontFamily: "var(--font-mono)", color: poiState[`${cat}/${sub}`] ? "var(--color-text-secondary)" : "var(--color-text-tertiary)" }}>
-                              {sub.replace(/_/g, " ")}
-                            </span>
-                          </label>
-                        ))
-                      }
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+          <div className="pe-uw-out-block" style={{ marginTop: 10 }}>
+            <div className="pe-uw-out-label">Estimated total cost</div>
+            <div className="pe-uw-out-cost tnum">PLN {fmtM(totalCost)}M</div>
           </div>
-        )}
-      </div>
-
-      {toggleBtn(toggles.regulatory, "Regulatory", () => onChange("regulatory", !toggles.regulatory))}
-
-      {/* Isochrone toggle with profile selector */}
-      <div>
-        <div style={{ display: "flex", gap: "2px" }}>
-          {toggleBtn(toggles.isochrone, "Isochrone", () => onChange("isochrone", !toggles.isochrone))}
-          <button
-            onClick={() => setIsoExpanded((v) => !v)}
-            style={{
-              background: "rgba(20,19,16,0.85)",
-              border: "1px solid var(--color-border-default)",
-              color: "var(--color-text-tertiary)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "9px",
-              padding: "4px 6px",
-              cursor: "pointer",
-            }}
-            title="Isochrone options"
-          >
-            {isoExpanded ? "▲" : "▼"}
-          </button>
-        </div>
-        {isoExpanded && (
-          <div
-            style={{
-              background: "rgba(20,19,16,0.9)",
-              border: "1px solid var(--color-border-default)",
-              padding: "6px 8px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "5px",
-              marginTop: "2px",
-            }}
-          >
-            <div style={{ fontSize: "8px", color: "var(--color-text-tertiary)", letterSpacing: "0.1em", textTransform: "uppercase" }}>Profile</div>
-            <div style={{ display: "flex", gap: "3px" }}>
-              {(["driving-hgv", "driving-car"] as const).map((p) => (
-                <button
-                  key={p}
-                  onClick={() => onIsoProfile(p)}
-                  style={{
-                    background: isoProfile === p ? "rgba(201,146,42,0.7)" : "rgba(20,19,16,0.7)",
-                    border: "1px solid var(--color-border-default)",
-                    color: isoProfile === p ? "var(--color-bg-canvas)" : "var(--color-text-tertiary)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "8px",
-                    padding: "2px 5px",
-                    cursor: "pointer",
-                  }}
-                >
-                  {p === "driving-hgv" ? "HGV" : "Car"}
-                </button>
-              ))}
-            </div>
-            {isoError && (
-              <div style={{ fontSize: "8px", color: "var(--color-text-tertiary)", fontStyle: "italic" }}>
-                ORS unavailable — isochrone not loaded
-              </div>
-            )}
+          <div className="pe-uw-rule" />
+          <div className="pe-uw-out-label">Max land price at target IRR</div>
+          <div className="pe-uw-residual tnum">
+            PLN {fmtInt(residual_pln_m2)}
+            <span className="pe-uw-residual-unit">/m²</span>
           </div>
-        )}
+          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
+            Total: PLN {fmtM(residual)}M for {area.toLocaleString("pl-PL")} m² plot
+          </div>
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", margin: "18px 0 6px" }}>
+            Sensitivity (±5% price × ±10% cost)
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            <SensCell v={c_HP_LC} tone="good" />
+            <SensCell v={c_HP_HC} />
+            <SensCell v={c_LP_LC} />
+            <SensCell v={c_LP_HC} tone="bad" />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 4, fontSize: 10, color: "var(--text-tertiary)" }}>
+            <div>+price / −cost</div>
+            <div style={{ textAlign: "right" }}>+price / +cost</div>
+            <div>−price / −cost</div>
+            <div style={{ textAlign: "right" }}>−price / +cost</div>
+          </div>
+        </div>
+        <div className="pe-uw-divider" />
+        <div className="pe-uw-in">
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Inputs</div>
+          <InputRow label="Build cost"     sub="PLN/m² PUM"        value={fmtInt(buildCost)} />
+          <InputRow label="Target IRR"     sub="%"                 value={irr} />
+          <InputRow label="Financing"      sub="% LTV · WIBOR+2.5" value={`${ltv}%`} />
+          <InputRow label="Sales velocity" sub="units / mo"        value="6" />
+          <InputRow label="Build duration" sub="months"            value={duration} />
+        </div>
       </div>
-
-      {toggleBtn(drawMode, drawMode ? "Draw: on" : "Draw polygon", () => onDrawMode(!drawMode))}
+      <div style={{ fontSize: 11, color: "var(--text-tertiary)", lineHeight: 1.5, marginTop: 18 }}>
+        This is a screening tool. Always run a full underwrite before committing capital.
+      </div>
     </div>
   );
 }
+
+// ── PlotEvaluation panel ──────────────────────────────────────────────────────
+
+function PlotEvaluation() {
+  const [saved, setSaved] = useState(true);
+
+  const ratio = PLOT.demo.dwellings_per_1000 / PLOT.demo.dwellings_warsaw;
+  const supply = ratio < 0.95
+    ? { label: "under-supplied", color: "var(--up)", bg: "#ECF2EC" }
+    : ratio < 1.05
+    ? { label: "balanced", color: "var(--warn)", bg: "#F2EFE6" }
+    : { label: "over-supplied", color: "var(--down)", bg: "#F2ECEC" };
+
+  return (
+    <aside className="eval-panel" style={{ width: 480 }}>
+      {/* Plot identifier strip */}
+      <div className="pe-id-strip">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Plot Evaluation · Wola</div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-heading)", marginTop: 4 }}>{PLOT.label}</div>
+            <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 3, fontFamily: "IBM Plex Mono" }}>KW {PLOT.kw}</div>
+          </div>
+          <button className={"pe-star " + (saved ? "on" : "")} onClick={() => setSaved(!saved)} title="Save deal">★</button>
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 10 }}>{PLOT.address}</div>
+        <div style={{ fontSize: 12, color: "var(--text-primary)", marginTop: 4 }}>
+          <span className="tnum">{PLOT.area_m2.toLocaleString("pl-PL")}</span> m² · {PLOT.fnSummary}
+        </div>
+        <div className="pe-actions">
+          <button className="pe-btn pe-btn-primary">Generate Plot Report (PDF)</button>
+          <button className="pe-btn">Compare</button>
+          <button className="pe-btn">Track</button>
+        </div>
+      </div>
+
+      {/* A — Zoning */}
+      <div className="pe-section">
+        <SectionHd letter="A" title="Zoning & Planning" />
+        <div className="pe-status pe-status-ok">
+          <span className="dot" /> MPZP enacted · {PLOT.mpzp.name} · {PLOT.mpzp.enacted}
+        </div>
+        <KV rows={[
+          ["Function code",     PLOT.mpzp.fn],
+          ["Max FAR",           <span className="tnum">{PLOT.mpzp.far}</span>],
+          ["Max height",        <span><span className="tnum">{PLOT.mpzp.height}</span> m</span>],
+          ["Max site coverage", <span><span className="tnum">{PLOT.mpzp.coverage}</span>%</span>],
+          ["Min greenery",      <span><span className="tnum">{PLOT.mpzp.greenery}</span>%</span>],
+          ["Min parking ratio", <span><span className="tnum">{PLOT.mpzp.parking}</span> per unit</span>],
+          ["Front setback",     <span><span className="tnum">{PLOT.mpzp.setback}</span> m</span>],
+        ]} />
+        <div className="source-quote">
+          {PLOT.mpzp.quote}
+          <span className="source-attr">— {PLOT.mpzp.cite}</span>
+        </div>
+        <a className="how-link" href="#">View MPZP text · PL ↔ EN</a>
+      </div>
+
+      {/* B — Land Comps */}
+      <div className="pe-section">
+        <SectionHd letter="B" title="Land comparable transactions" subtitle="Last 24 months · 1 km radius · RCN" />
+        <div className="pe-stat-row">
+          <div className="stat"><div className="v tnum">3,840</div><div className="l">PLN/m² median</div></div>
+          <div className="stat"><div className="v tnum">{PLOT.landComps.n}</div><div className="l">comparable tx</div></div>
+          <div className="stat"><div className="v tnum">{(PLOT.landComps.total_m2 / 1000).toFixed(1)}k</div><div className="l">m² traded</div></div>
+        </div>
+        <div style={{ marginTop: 12, marginBottom: 8 }}><CompsScatter /></div>
+        <table className="pe-table">
+          <thead>
+            <tr><th>Date</th><th className="num">Dist</th><th className="num">Area</th><th className="num">PLN/m²</th><th>Mkt</th></tr>
+          </thead>
+          <tbody>
+            {PLOT.landComps.top.map((c, i) => (
+              <tr key={i}>
+                <td className="mono" style={{ fontSize: 11 }}>{c.date}</td>
+                <td className="num"><span className="tnum">{c.dist}</span> m</td>
+                <td className="num tnum">{c.area.toLocaleString("pl-PL")}</td>
+                <td className="num tnum"><strong>{c.pln_m2.toLocaleString("pl-PL")}</strong></td>
+                <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>{c.mkt}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <a className="how-link" href="#">How comps are selected</a>
+      </div>
+
+      {/* C — Apartment Exit */}
+      <div className="pe-section">
+        <SectionHd letter="C" title="Apartment exit pricing" subtitle="1 km radius · Jawność cen + RCN" />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+          <div className="pe-mini-card">
+            <div className="t">Primary market</div>
+            <div className="v tnum">{PLOT.apt.primary_pln.toLocaleString("pl-PL")} <span className="u">PLN/m²</span></div>
+            <div className="d" style={{ color: "var(--up)" }}>+{PLOT.apt.primary_30d}% · 30d</div>
+          </div>
+          <div className="pe-mini-card">
+            <div className="t">Secondary market</div>
+            <div className="v tnum">{PLOT.apt.secondary_pln.toLocaleString("pl-PL")} <span className="u">PLN/m²</span></div>
+            <div className="d" style={{ color: "var(--up)" }}>+{PLOT.apt.secondary_12m}% · 12m</div>
+          </div>
+        </div>
+        <DualLine a={PLOT.apt.series12m_primary} b={PLOT.apt.series12m_secondary} />
+        <div style={{ display: "flex", gap: 14, marginTop: 6, fontSize: 11, color: "var(--text-secondary)" }}>
+          <span><span style={{ display: "inline-block", width: 14, height: 2, background: "var(--brand-navy)", verticalAlign: "middle", marginRight: 4 }} />Primary</span>
+          <span><span style={{ display: "inline-block", width: 14, height: 2, background: "var(--brand-blue-2)", verticalAlign: "middle", marginRight: 4 }} />Secondary</span>
+        </div>
+        <div style={{ marginTop: 14, padding: "12px 14px", background: "var(--bg-wash)", border: "1px solid var(--border)" }}>
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Projected exit · 24 months · @ 3% / yr</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            <div><div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Conservative</div><div className="tnum" style={{ fontSize: 14, fontWeight: 500 }}>24,900</div></div>
+            <div><div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Central</div><div className="tnum" style={{ fontSize: 14, fontWeight: 500, color: "var(--brand-navy)" }}>25,650</div></div>
+            <div><div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Optimistic</div><div className="tnum" style={{ fontSize: 14, fontWeight: 500 }}>26,420</div></div>
+          </div>
+        </div>
+      </div>
+
+      {/* D — Competing Supply */}
+      <div className="pe-section">
+        <SectionHd letter="D" title="Competing residential supply" subtitle="2 km radius · pipeline + permitted" />
+        <div className="pe-stat-row">
+          <div className="stat"><div className="v tnum">{PLOT.supply.units_total.toLocaleString("pl-PL")}</div><div className="l">units in pipeline</div></div>
+          <div className="stat"><div className="v tnum">{PLOT.supply.units_24m.toLocaleString("pl-PL")}</div><div className="l">deliver ≤24 m</div></div>
+          <div className="stat"><div className="v tnum">{PLOT.supply.avg_price.toLocaleString("pl-PL")}</div><div className="l">avg PLN/m²</div></div>
+        </div>
+        <table className="pe-table" style={{ marginTop: 12 }}>
+          <thead>
+            <tr>
+              <th style={{ minWidth: 96 }}>Developer</th><th>Project</th>
+              <th className="num">Dist</th><th className="num">Units</th>
+              <th>Compl.</th><th className="num">PLN/m²</th>
+              <th className="num">Sold</th><th className="num">/mo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {PLOT.supply.projects.map((p, i) => (
+              <tr key={i}>
+                <td style={{ fontSize: 12, fontWeight: 500 }}>{p.dev}</td>
+                <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>{p.name}</td>
+                <td className="num tnum">{p.dist_m} m</td>
+                <td className="num tnum">{p.units}</td>
+                <td className="mono" style={{ fontSize: 11, color: "var(--text-secondary)" }}>{p.completion}</td>
+                <td className="num tnum"><strong>{p.pln.toLocaleString("pl-PL")}</strong></td>
+                <td className="num tnum">{p.sold}</td>
+                <td className="num tnum">{p.vel.toFixed(1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <a className="how-link" href="#" style={{ marginTop: 6, display: "inline-block" }}>View all on map</a>
+      </div>
+
+      {/* E — Demographics */}
+      <div className="pe-section">
+        <SectionHd letter="E" title="Demographics & macro" subtitle="Wola · gmina + dzielnica" />
+        <div className="kv">
+          <div className="k">Population</div>
+          <div className="v">
+            <span className="tnum">{PLOT.demo.pop.toLocaleString("pl-PL")}</span>
+            <SparkLine data={PLOT.demo.pop_series} />
+            <span style={{ display: "block", fontSize: 10, color: "var(--up)", marginTop: 1 }}>+{PLOT.demo.pop_5y}% · 5y</span>
+          </div>
+          <div className="k">Age 25–44</div>
+          <div className="v">
+            <span className="tnum">{PLOT.demo.age_25_44_pct}%</span>
+            <span style={{ display: "block", fontSize: 10, color: "var(--text-secondary)", marginTop: 1 }}>vs Warsaw {PLOT.demo.warsaw_avg}%</span>
+          </div>
+          <div className="k">Avg gross / mo</div>
+          <div className="v">
+            PLN <span className="tnum">{PLOT.demo.income.toLocaleString("pl-PL")}</span>
+            <SparkLine data={PLOT.demo.income_series} />
+            <span style={{ display: "block", fontSize: 10, color: "var(--up)", marginTop: 1 }}>+{PLOT.demo.income_3y}% · 3y</span>
+          </div>
+          <div className="k">Dwellings / 1,000</div>
+          <div className="v">
+            <span className="tnum">{PLOT.demo.dwellings_per_1000}</span>
+            <span style={{ display: "inline-block", marginLeft: 8, padding: "2px 6px", fontSize: 10, fontWeight: 500, background: supply.bg, color: supply.color, textTransform: "uppercase", letterSpacing: "0.3px", verticalAlign: "middle" }}>{supply.label}</span>
+            <span style={{ display: "block", fontSize: 10, color: "var(--text-secondary)", marginTop: 1 }}>Warsaw {PLOT.demo.dwellings_warsaw}</span>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 14 }}>GUS BDL · 2025 Q4</div>
+      </div>
+
+      {/* F — Infrastructure */}
+      <div className="pe-section">
+        <SectionHd letter="F" title="Infrastructure" subtitle="Distance to amenities" />
+        <div className="kv">
+          <div className="k">Nearest metro</div>
+          <div className="v">Rondo Daszyńskiego · M2 · <span className="tnum">4</span> min</div>
+          <div className="k">Nearest tram</div>
+          <div className="v">{PLOT.infra.tram.name} · <span className="tnum">{PLOT.infra.tram.dist_m}</span> m</div>
+          <div className="k">Schools (1 km)</div>
+          <div className="v tnum">{PLOT.infra.schools}</div>
+          <div className="k">Healthcare (2 km)</div>
+          <div className="v tnum">{PLOT.infra.hospitals}</div>
+        </div>
+        <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", margin: "16px 0 0" }}>Planned transport · 5 km</div>
+        {PLOT.infra.planned.map((p, i) => {
+          const st = p.status === "Funded"
+            ? { bg: "var(--bg-wash)", c: "var(--brand-navy)" }
+            : p.status === "In construction"
+            ? { bg: "#ECF2EC", c: "var(--up)" }
+            : { bg: "#F2EFE6", c: "var(--warn)" };
+          return (
+            <div key={i} style={{ padding: "9px 0", borderTop: "1px solid var(--divider)", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12 }}>{p.prj}</div>
+                <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 1 }}>{p.src} · ETA {p.eta}</div>
+              </div>
+              <span style={{ fontSize: 10, padding: "2px 6px", background: st.bg, color: st.c, textTransform: "uppercase", fontWeight: 500, letterSpacing: "0.3px" }}>{p.status}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* G — Regulatory */}
+      <div className="pe-section">
+        <SectionHd letter="G" title="Regulatory & political" subtitle="Risk indicators · Wola" />
+        {[
+          { date: "02 Mar 26", cat: "Council",       t: "Resolution LXXII/2356/2026 — MPZP Czyste-Towarowa enacted (low risk)." },
+          { date: "14 Jan 26", cat: "Council",       t: "Motion to review Wola green-cover ratios — referred to committee, no draft yet." },
+          { date: "—",         cat: "Environmental", t: "No Natura 2000 within plot. Closest: Łęgi Czerniakowskie 4.2 km. Heritage zone informational only." },
+          { date: "21 May 26", cat: "Consultation",  t: "Public consultation — Wola corridor parking strategy. Window closes 21 May 2026." },
+        ].map((it, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "68px 1fr 14px", gap: 10, padding: "10px 0", borderTop: i ? "1px solid var(--divider)" : "none", alignItems: "flex-start" }}>
+            <div>
+              <div className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{it.date}</div>
+              <div style={{ fontSize: 9, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.3px", marginTop: 2 }}>{it.cat}</div>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-primary)", lineHeight: 1.4 }}>{it.t}</div>
+            <a href="#" style={{ fontSize: 11, color: "var(--text-tertiary)", textAlign: "right" }}>↗</a>
+          </div>
+        ))}
+      </div>
+
+      {/* H — Recent Intelligence */}
+      <div className="pe-section">
+        <SectionHd letter="H" title="Recent intelligence" subtitle="Last 30 days · Wola + residential primary" />
+        {PLOT.intel.map((it, i) => (
+          <div key={i} style={{ padding: "11px 0", borderTop: i ? "1px solid var(--divider)" : "none" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+              <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{it.ts}</span>
+              <span className={"type-pill " + it.t} style={{ fontSize: 9 }}>{it.t}</span>
+              <span style={{ marginLeft: "auto" }}><ConfDots n={it.conf} /></span>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-primary)", lineHeight: 1.45 }}>{it.txt}</div>
+            <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 3 }}>{it.src}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* I — Underwriting */}
+      <Underwriting />
+
+      {/* Footer */}
+      <div className="pe-footer">
+        <button className="pe-btn pe-btn-primary pe-btn-lg">Generate Plot Report (PDF)</button>
+        <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 6, textAlign: "center" }}>
+          4–6 page report · PL + EN sections · ~15s generation
+        </div>
+        <button className="pe-btn pe-btn-disabled" style={{ width: "100%", marginTop: 10 }} disabled>
+          Export to PowerPoint <span style={{ fontSize: 10, color: "var(--text-tertiary)", marginLeft: 6 }}>(coming soon)</span>
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+// ── PlotCompareView ───────────────────────────────────────────────────────────
+
+function PlotCol({ p, isA }: { p: typeof PLOT_A_LITE | typeof PLOT_B; isA: boolean }) {
+  const fmtN = (v: number) => v.toLocaleString("pl-PL");
+  return (
+    <div style={{ flex: 1, padding: "18px 20px", borderRight: isA ? "1px solid var(--border)" : "none", minWidth: 0, overflowY: "auto" }}>
+      <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{isA ? "Plot A" : "Plot B"}</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-heading)", marginTop: 4, lineHeight: 1.3 }}>{p.label}</div>
+      <div className="mono" style={{ fontSize: 10, color: "var(--text-secondary)", marginTop: 3 }}>KW {p.kw}</div>
+      <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 8, lineHeight: 1.4 }}>{p.address}</div>
+      <div style={{ fontSize: 11, color: "var(--text-primary)", marginTop: 4 }}>
+        <span className="tnum">{fmtN(p.area_m2)}</span> m² · {p.district}
+      </div>
+
+      <div style={{ marginTop: 14, padding: "8px 10px", background: p.mpzp.status === "ok" ? "#ECF2EC" : "#FFF8E1", border: "1px solid " + (p.mpzp.status === "ok" ? "rgba(31,107,58,0.2)" : "rgba(180,138,0,0.2)"), fontSize: 11, lineHeight: 1.4 }}>
+        <div style={{ fontWeight: 500, color: p.mpzp.status === "ok" ? "var(--up)" : "#8B6914" }}>
+          {p.mpzp.status === "ok" ? "● MPZP enacted" : "▲ No MPZP"}
+        </div>
+        <div style={{ color: "var(--text-secondary)", marginTop: 2 }}>{p.mpzp.name}</div>
+        <div style={{ color: "var(--text-primary)", marginTop: 4 }}>
+          FAR <span className="tnum">{p.mpzp.far}</span> · H <span className="tnum">{p.mpzp.height}</span>m · {p.mpzp.fn}
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Land comp</div>
+        <div className="tnum" style={{ fontSize: 18, fontWeight: 500 }}>{fmtN(p.landMedian)} <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400 }}>PLN/m²</span></div>
+        <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>median · {p.landN} comps · 1 km</div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Apt exit (primary)</div>
+        <div className="tnum" style={{ fontSize: 18, fontWeight: 500 }}>{fmtN(p.apt.primary)} <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400 }}>PLN/m²</span></div>
+        <div style={{ fontSize: 11, color: "var(--up)" }}>+{p.apt.yoy.toFixed(1)}% YoY</div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Competing supply</div>
+        <div className="tnum" style={{ fontSize: 14, fontWeight: 500 }}>{fmtN(p.supplyUnits)} units</div>
+        <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>within {p.supplyDist} km</div>
+      </div>
+
+      <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--divider)" }}>
+        <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Demographics</div>
+        <div style={{ fontSize: 11, lineHeight: 1.6, color: "var(--text-primary)" }}>
+          Pop <span className="tnum">{fmtN(p.demo.pop)}</span> · <span style={{ color: "var(--up)" }}>+{p.demo.pop_5y}% 5y</span><br />
+          Age 25–44 <span className="tnum">{p.demo.age2544}%</span><br />
+          Avg inc PLN <span className="tnum">{fmtN(p.demo.income)}</span>/mo
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Transit</div>
+        <div style={{ fontSize: 11, color: "var(--text-primary)" }}>{p.metro}</div>
+        <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{fmtN(p.metroDist)} m walk</div>
+      </div>
+
+      <div style={{ marginTop: 14, padding: "10px 12px", background: "var(--bg-wash)", fontSize: 11, lineHeight: 1.5, color: "var(--text-primary)" }}>
+        <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 4 }}>Signal</div>
+        {p.signal}
+      </div>
+    </div>
+  );
+}
+
+function PlotCompareView() {
+  return (
+    <aside className="eval-panel" style={{ width: 560, display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+        <div>
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Compare mode</div>
+          <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>Towarowa 28 vs. Białołęka greenfield</div>
+        </div>
+        <button className="pe-btn pe-btn-primary" style={{ fontSize: 11, padding: "6px 10px" }}>
+          Generate comparison PDF
+        </button>
+      </div>
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+        <PlotCol p={PLOT_A_LITE} isA={true} />
+        <PlotCol p={PLOT_B} isA={false} />
+      </div>
+      <div style={{ padding: "12px 18px", borderTop: "1px solid var(--border)", fontSize: 11, color: "var(--text-tertiary)", background: "#FAFAFA", lineHeight: 1.5, flexShrink: 0 }}>
+        Toggle Compare off to return to single-plot Evaluation panel with full 9-section underwriting.
+      </div>
+    </aside>
+  );
+}
+
+// ── Left rail ─────────────────────────────────────────────────────────────────
+
+function LeftRail() {
+  const [tree, setTree] = useState<LayerCat[]>(INITIAL_LAYER_TREE);
+  const [activeDeal, setActiveDeal] = useState("d2");
+  const [dateRange, setDateRange] = useState("24 m");
+
+  function toggleCat(k: string) {
+    setTree(t => t.map(c => c.key === k ? { ...c, open: !c.open } : c));
+  }
+
+  return (
+    <aside className="layer-panel" style={{ width: 260 }}>
+      {/* Saved Deals */}
+      <div className="layer-section">
+        <div className="hd">Saved Deals</div>
+        {SAVED_DEALS.map(d => (
+          <div key={d.id} className={"saved-deal " + (d.id === activeDeal ? "active" : "")} onClick={() => setActiveDeal(d.id)}>
+            <div className="thumb" aria-hidden="true">
+              <svg viewBox="0 0 40 40" style={{ width: "100%", height: "100%" }}>
+                <rect width="40" height="40" fill="#F0F0F0" />
+                <polygon
+                  points={d.id === "d1" ? "6,12 30,8 34,28 14,32" : d.id === "d2" ? "10,10 30,12 28,30 12,28" : d.id === "d3" ? "8,8 32,10 30,32 8,28" : d.id === "d4" ? "6,14 28,8 34,24 18,32" : "10,12 32,16 28,30 8,26"}
+                  fill={d.id === activeDeal ? "var(--brand-navy)" : "#C8C8C8"}
+                  fillOpacity={d.id === activeDeal ? 0.35 : 0.6}
+                  stroke={d.id === activeDeal ? "var(--brand-navy)" : "#888"}
+                  strokeWidth="1"
+                />
+              </svg>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="lbl">{d.label}</div>
+              <div className="sub">{d.district} · <span style={{ color: d.days === 0 ? "var(--up)" : "var(--text-tertiary)" }}>{d.days === 0 ? "updated today" : `${d.days}d ago`}</span></div>
+            </div>
+          </div>
+        ))}
+        <a className="how-link" href="#" style={{ marginTop: 8 }}>+ Save current view as deal</a>
+      </div>
+
+      {/* Map Layers */}
+      <div className="layer-section">
+        <div className="hd">Map Layers</div>
+        {tree.map(cat => (
+          <div key={cat.key}>
+            <div className="layer-row" onClick={() => toggleCat(cat.key)} style={{ cursor: "pointer" }}>
+              <span style={{ flex: 1, fontWeight: 500, fontSize: 12, color: "var(--text-primary)" }}>{cat.label}</span>
+              <span className="chev">{cat.open ? "▾" : "▸"}</span>
+            </div>
+            {cat.open && cat.children.map((ch, i) => (
+              <div key={i} className="layer-row sub">
+                <span className={"cbox " + (ch.on ? "on" : "")} />
+                <span>{ch.label}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div className="layer-section">
+        <div className="hd">Filters</div>
+        <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 6 }}>Date range</div>
+        <div style={{ display: "flex", gap: 4, marginBottom: 14, flexWrap: "wrap" }}>
+          {["6 m", "12 m", "24 m", "5 yr"].map(r => (
+            <span key={r} className={"chip" + (dateRange === r ? " active" : "")} onClick={() => setDateRange(r)}>{r}</span>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 6 }}>Plot price PLN/m²</div>
+        <div className="mono tnum" style={{ fontSize: 12, marginBottom: 6 }}>800 — 4,500</div>
+        <div style={{ height: 4, background: "#F0F0F0", position: "relative" }}>
+          <div style={{ position: "absolute", left: "15%", right: "35%", top: 0, bottom: 0, background: "var(--brand-navy)" }} />
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+// ── Map controls ──────────────────────────────────────────────────────────────
+
+function MapControls({ compareOn, onToggle }: { compareOn: boolean; onToggle: () => void }) {
+  return (
+    <div style={{ position: "absolute", top: 14, right: 14, display: "flex", flexDirection: "column", gap: 6, zIndex: 10 }}>
+      <button className="map-ctl">+</button>
+      <button className="map-ctl">−</button>
+      <button className="map-ctl" title="Locate">⊕</button>
+      <button className={"map-ctl wide " + (compareOn ? "on" : "")} onClick={onToggle}>Compare</button>
+      <button className="map-ctl wide">Fullscreen</button>
+    </div>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+const WARSAW = { longitude: 21.017, latitude: 52.237, zoom: 13 };
 
 export function WorkbenchPage() {
   const mapRef = useRef<MapRef>(null);
-  const [sites, setSites] = useState<SavedSite[]>([]);
-  const [selectedSite, setSelectedSite] = useState<SavedSite | null>(null);
-  // Ad-hoc evaluation state (map click or polygon draw, not a saved site)
-  const [adHocGeom, setAdHocGeom] = useState<string | null>(null);
-  const [lang, setLangState] = useState<Lang>(getStoredLang);
-
-  function toggleLang() {
-    const next: Lang = lang === "en" ? "ar" : "en";
-    setLang(next);
-    setLangState(next);
-  }
-  const [markerCoords, setMarkerCoords] = useState<{
-    lng: number;
-    lat: number;
-  } | null>(null);
-
-  // Polygon draw state
-  const [drawMode, setDrawMode] = useState(false);
-  const [drawVertices, setDrawVertices] = useState<[number, number][]>([]);
-
-  // POI hover state (category name or null)
-  const [hoveredPoiCat, setHoveredPoiCat] = useState<string | null>(null);
-  const [poiPopup, setPoiPopup] = useState<{
-    lng: number; lat: number;
-    name_en: string | null; name_ar: string | null;
-    address: string | null;
-    category: string; subcategory: string;
-    operator: string | null; brand: string | null;
-    phone: string | null; website: string | null;
-    opening_hours: string | null;
-    building_levels: number | null; height_m: number | null;
-    capacity: number | null; footprint_area_sqm: number | null;
-    last_seen_at: string | null;
-  } | null>(null);
-
-  // Layer data
-  const [districtGeoJSON, setDistrictGeoJSON] = useState<object | null>(null);
-  const [poiGeoJSON, setPoiGeoJSON] = useState<object | null>(null);
-  const [regulatoryGeoJSON, setRegulatoryGeoJSON] = useState<object | null>(null);
-  const [isochroneGeoJSON, setIsochroneGeoJSON] = useState<object | null>(null);
-  const [isoProfile, setIsoProfile] = useState<"driving-hgv" | "driving-car">("driving-hgv");
-  const [isoError, setIsoError] = useState<string | null>(null);
-
-  const [toggles, setToggles] = useState<LayerToggles>({
-    districts: true,
-    velocity: false,
-    pois: true,
-    regulatory: false,
-    isochrone: false,
-  });
-
-  // Velocity heatmap controls
-  const [velocityWindow, setVelocityWindow] = useState(90);
-  const [velocityAssetClass, setVelocityAssetClass] = useState("");
-  const [velocityTooltip, setVelocityTooltip] = useState<{
-    x: number; y: number;
-    district: string; districtAr: string | null;
-    txCount: number; pricePerSqm: number | null; latestMonth: string | null;
-  } | null>(null);
-
-  const { data: velocityRows = [] } = useDistrictVelocity(
-    velocityAssetClass || undefined,
-    velocityWindow,
-  );
-
-  // Build a lookup from district_key → velocity row
-  const velocityByKey = useMemo((): Record<string, VelocityRow> => {
-    const m: Record<string, VelocityRow> = {};
-    for (const row of velocityRows) {
-      m[row.district_key] = row;
-    }
-    return m;
-  }, [velocityRows]);
-
-  // Max tx_count for normalizing color scale
-  const maxTxCount = useMemo(
-    () => Math.max(1, ...velocityRows.map((r) => r.tx_count)),
-    [velocityRows],
-  );
-
-  // Velocity GeoJSON: district polygons annotated with tx_count
-  const velocityGeoJSON = useMemo<GeoJSON.FeatureCollection | null>(() => {
-    if (!districtGeoJSON || !toggles.velocity) return null;
-    const fc = districtGeoJSON as GeoJSON.FeatureCollection;
-    const features = fc.features.map((f) => {
-      const id = String((f.properties as Record<string, unknown>)?.id ?? "");
-      const row = velocityByKey[id];
-      return {
-        ...f,
-        properties: {
-          ...(f.properties as Record<string, unknown>),
-          tx_count: row?.tx_count ?? 0,
-          avg_price_per_sqm: row?.avg_price_per_sqm ?? null,
-          avg_momentum_pct: row?.avg_momentum_pct ?? null,
-          latest_month: row?.latest_month ?? null,
-          has_data: row != null,
-        },
-      };
-    });
-    return { type: "FeatureCollection", features };
-  }, [districtGeoJSON, velocityByKey, toggles.velocity]);
-
-  const [poiState, setPoiState] = useState<Record<string, boolean>>(defaultPoiState);
-
-  function setToggle(k: keyof LayerToggles, v: boolean) {
-    setToggles((prev) => ({ ...prev, [k]: v }));
-  }
-
-  function setPoiSubcat(key: string, v: boolean) {
-    setPoiState((prev) => ({ ...prev, [key]: v }));
-  }
-
-  function setPoiCat(cat: string, v: boolean) {
-    setPoiState((prev) => {
-      const next = { ...prev };
-      for (const sub of POI_TAXONOMY[cat] ?? []) next[`${cat}/${sub}`] = v;
-      return next;
-    });
-  }
-
-  // Fetch district polygons once on mount
-  useEffect(() => {
-    fetch(`${API_BASE}/spatial/districts/geojson`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d) setDistrictGeoJSON(d); })
-      .catch(() => {});
-  }, []);
-
-  // Fetch POIs when layer enabled
-  useEffect(() => {
-    if (!toggles.pois || poiGeoJSON) return;
-    fetch(`${API_BASE}/spatial/pois/geojson?limit=5000`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d) setPoiGeoJSON(d); })
-      .catch(() => {});
-  }, [toggles.pois, poiGeoJSON]);
-
-  // Fetch regulatory zones when layer enabled
-  useEffect(() => {
-    if (!toggles.regulatory || regulatoryGeoJSON) return;
-    fetch(`${API_BASE}/spatial/regulatory-zones/geojson`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d) setRegulatoryGeoJSON(d); })
-      .catch(() => {});
-  }, [toggles.regulatory, regulatoryGeoJSON]);
-
-  // Fetch isochrone for selected site when layer enabled or profile changes
-  useEffect(() => {
-    if (!toggles.isochrone || !markerCoords) return;
-    const { lng, lat } = markerCoords;
-    setIsoError(null);
-    fetch(`${API_BASE}/spatial/isochrone?lon=${lng}&lat=${lat}&profile=${isoProfile}`, {
-      headers: authHeaders(),
-    })
-      .then((r) => {
-        if (!r.ok) throw new Error(`${r.status}`);
-        return r.json();
-      })
-      .then((d) => { if (d) setIsochroneGeoJSON(d); })
-      .catch((e: unknown) => {
-        setIsoError(e instanceof Error ? e.message : "ORS unavailable");
-      });
-  }, [toggles.isochrone, markerCoords, isoProfile]);
-
-  const loadSites = useCallback(async () => {
-    try {
-      const data = await fetchSites();
-      setSites(data);
-      // Auto-select the first site on initial load if nothing is selected yet
-      if (data.length > 0) {
-        setSelectedSite((prev) => prev ?? data[0] ?? null);
-      }
-    } catch {
-      // silently fail — user may not be authenticated yet
-    }
-  }, []);
-
-  useEffect(() => {
-    loadSites();
-  }, [loadSites]);
-
-  function handleSelectSite(site: SavedSite) {
-    setSelectedSite(site);
-    setAdHocGeom(null);
-    setDrawMode(false);
-    setDrawVertices([]);
-    setIsochroneGeoJSON(null); // clear stale isochrone
-    try {
-      const geom = JSON.parse(site.geometry_geojson);
-      if (geom.type === "Point" && mapRef.current) {
-        mapRef.current.flyTo({
-          center: [geom.coordinates[0], geom.coordinates[1]],
-          zoom: 14,
-          duration: 800,
-        });
-        setMarkerCoords({ lng: geom.coordinates[0], lat: geom.coordinates[1] });
-      }
-    } catch {
-      // non-point geometry
-    }
-  }
-
-  function handleMapClick(e: MapLayerMouseEvent) {
-    if (drawMode) {
-      setDrawVertices((prev) => [...prev, [e.lngLat.lng, e.lngLat.lat]]);
-      return;
-    }
-    // Check if a POI dot was clicked
-    const map = mapRef.current?.getMap();
-    if (map && toggles.pois) {
-      const feats = map.queryRenderedFeatures(e.point, { layers: ["poi-dots"] });
-      if (feats?.length) {
-        const f = feats[0]!;
-        const p = f.properties as Record<string, string | null>;
-        setPoiPopup({
-          lng: e.lngLat.lng,
-          lat: e.lngLat.lat,
-          name_en: p["name_en"] ?? null,
-          name_ar: p["name_ar"] ?? null,
-          address: p["address"] ?? null,
-          category: p["category"] ?? "",
-          subcategory: p["subcategory"] ?? "",
-          operator: p["operator"] ?? null,
-          brand: p["brand"] ?? null,
-          phone: p["phone"] ?? null,
-          website: p["website"] ?? null,
-          opening_hours: p["opening_hours"] ?? null,
-          building_levels: p["building_levels"] != null ? Number(p["building_levels"]) : null,
-          height_m: p["height_m"] != null ? Number(p["height_m"]) : null,
-          capacity: p["capacity"] != null ? Number(p["capacity"]) : null,
-          footprint_area_sqm: p["footprint_area_sqm"] != null ? Number(p["footprint_area_sqm"]) : null,
-          last_seen_at: p["last_seen_at"] ?? null,
-        });
-        return;
-      }
-    }
-    // No POI hit — dismiss any open popup and run point evaluate
-    setPoiPopup(null);
-    setSelectedSite(null);
-    setIsochroneGeoJSON(null);
-    setMarkerCoords({ lng: e.lngLat.lng, lat: e.lngLat.lat });
-    setAdHocGeom(`POINT(${e.lngLat.lng} ${e.lngLat.lat})`);
-  }
-
-  function handleMapDblClick(e: { lngLat: { lng: number; lat: number } }) {
-    if (!drawMode || drawVertices.length < 3) return;
-    // Close polygon on double-click
-    const verts = [...drawVertices, [e.lngLat.lng, e.lngLat.lat]];
-    const ring = [...verts, verts[0]] as [number, number][]; // close ring
-    const coordStr = ring.map(([x, y]) => `${x} ${y}`).join(", ");
-    const polygonWkt = `POLYGON((${coordStr}))`;
-    setAdHocGeom(polygonWkt);
-    setSelectedSite(null);
-    setMarkerCoords(null);
-    setDrawMode(false);
-    setDrawVertices([]);
-    setIsochroneGeoJSON(null);
-  }
-
-  async function handleDelete(id: number) {
-    await deleteSite(id);
-    if (selectedSite?.id === id) {
-      setSelectedSite(null);
-      setAdHocGeom(null);
-      setMarkerCoords(null);
-      setIsochroneGeoJSON(null);
-    }
-    loadSites();
-  }
+  const [compareOn, setCompareOn] = useState(false);
 
   return (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--bg-page)",
-        overflow: "hidden",
-      }}
-    >
-      {/* Workbench toolbar */}
-      <div
-        style={{
-          height: "40px",
-          borderBottom: "1px solid var(--border)",
-          display: "flex",
-          alignItems: "center",
-          padding: "0 20px",
-          gap: "20px",
-          flexShrink: 0,
-          background: "var(--bg-surface)",
-        }}
-      >
-        <span
-          style={{
-            fontSize: "11px",
-            fontWeight: 500,
-            textTransform: "uppercase",
-            letterSpacing: "0.5px",
-            color: "var(--text-secondary)",
-          }}
+    <div style={{ display: "flex", height: "calc(100vh - 100px)", background: "#fff", overflow: "hidden" }}>
+      <LeftRail />
+
+      {/* Map */}
+      <div style={{ flex: 1, position: "relative", overflow: "hidden", borderRight: "1px solid var(--border)" }}>
+        <Map
+          ref={mapRef}
+          initialViewState={WARSAW}
+          style={{ width: "100%", height: "100%" }}
+          mapStyle="https://tiles.openfreemap.org/styles/liberty"
         >
-          Site Workbench
-        </span>
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "16px" }}>
-          <button
-            onClick={toggleLang}
-            style={{
-              fontSize: "11px",
-              color: "var(--text-secondary)",
-              background: "none",
-              border: "1px solid var(--border)",
-              padding: "2px 8px",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              borderRadius: "3px",
-            }}
-          >
-            {lang === "en" ? "AR" : "EN"}
-          </button>
-          <span style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>
-            Warsaw · WGS-84
-          </span>
-        </div>
-      </div>
+          <NavigationControl position="top-left" showCompass={false} />
+        </Map>
 
-      {/* Three-pane body */}
-      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        {/* Left: Saved Sites */}
-        <SavedSitesPanel
-          sites={sites}
-          selected={selectedSite?.id ?? null}
-          onSelect={handleSelectSite}
-          onDelete={handleDelete}
-          onRefresh={loadSites}
-        />
-
-        {/* Center: Map */}
-        <div style={{ flex: 1, position: "relative" }}>
-          <Map
-            ref={mapRef}
-            initialViewState={{
-              longitude: WARSAW_CENTER.lng,
-              latitude: WARSAW_CENTER.lat,
-              zoom: 12,
-            }}
-            style={{ width: "100%", height: "100%", cursor: drawMode ? "crosshair" : "grab" }}
-            mapStyle="https://tiles.openfreemap.org/styles/liberty"
-            onClick={handleMapClick}
-            onDblClick={handleMapDblClick}
-            onMouseMove={(e) => {
-              if (!toggles.velocity || !velocityGeoJSON) { setVelocityTooltip(null); return; }
-              const map = mapRef.current?.getMap();
-              if (!map) return;
-              const feats = map.queryRenderedFeatures(e.point, { layers: ["velocity-fill"] });
-              if (!feats?.length) { setVelocityTooltip(null); return; }
-              const feat = feats[0];
-              if (!feat) { setVelocityTooltip(null); return; }
-              const p = (feat.properties ?? {}) as Record<string, unknown>;
-              if (!p || !p.has_data) { setVelocityTooltip(null); return; }
-              setVelocityTooltip({
-                x: e.point.x,
-                y: e.point.y,
-                district: String(p.name_en ?? ""),
-                districtAr: p.name_ar ? String(p.name_ar) : null,
-                txCount: Number(p.tx_count ?? 0),
-                pricePerSqm: p.avg_price_per_sqm != null ? Number(p.avg_price_per_sqm) : null,
-                latestMonth: p.latest_month ? String(p.latest_month) : null,
-              });
-            }}
-            onMouseLeave={() => setVelocityTooltip(null)}
-          >
-            <NavigationControl position="top-right" />
-
-            {/* ── District polygon layer ─────────────────────────────────── */}
-            {districtGeoJSON && toggles.districts && (
-              <Source id="districts" type="geojson" data={districtGeoJSON as GeoJSON.FeatureCollection}>
-                <Layer
-                  id="districts-fill"
-                  type="fill"
-                  paint={{
-                    "fill-color": "#C9922A",
-                    "fill-opacity": 0.06,
-                  }}
-                />
-                <Layer
-                  id="districts-outline"
-                  type="line"
-                  paint={{
-                    "line-color": "#C9922A",
-                    "line-width": 1,
-                    "line-opacity": 0.5,
-                  }}
-                />
-                {/* ── Bilingual district labels ── */}
-                <Layer
-                  id="districts-labels"
-                  type="symbol"
-                  layout={{
-                    "text-field": ["get", lang === "ar" ? "name_ar" : "name_en"],
-                    "text-size": 10,
-                    "text-font": ["Noto Sans Regular"],
-                    "text-anchor": "center",
-                    "text-max-width": 8,
-                  }}
-                  paint={{
-                    "text-color": "#C9922A",
-                    "text-opacity": 0.7,
-                    "text-halo-color": "#0D0C0A",
-                    "text-halo-width": 1,
-                  }}
-                />
-              </Source>
-            )}
-
-            {/* ── Velocity heatmap layer ────────────────────────────────── */}
-            {velocityGeoJSON && toggles.velocity && (
-              <Source id="velocity" type="geojson" data={velocityGeoJSON}>
-                <Layer
-                  id="velocity-fill"
-                  type="fill"
-                  paint={{
-                    "fill-color": [
-                      "case",
-                      ["!", ["get", "has_data"]], "rgba(0,0,0,0)",
-                      [
-                        "interpolate", ["linear"],
-                        ["get", "tx_count"],
-                        0,  "rgba(201,146,42,0.05)",
-                        5,  "rgba(201,146,42,0.2)",
-                        15, "rgba(201,146,42,0.4)",
-                        30, "rgba(201,146,42,0.65)",
-                        60, "rgba(201,146,42,0.85)",
-                      ],
-                    ],
-                    "fill-opacity": 1,
-                  }}
-                />
-                <Layer
-                  id="velocity-outline"
-                  type="line"
-                  filter={["==", ["get", "has_data"], true]}
-                  paint={{
-                    "line-color": "rgba(201,146,42,0.5)",
-                    "line-width": 1,
-                  }}
-                />
-              </Source>
-            )}
-
-            {/* ── POI layer (per-category filtering + hover emphasis) ────── */}
-            {poiGeoJSON && toggles.pois && (() => {
-              // Build subcategory filter from poiState
-              const activeSubcats = Object.entries(poiState)
-                .filter(([, v]) => v)
-                .map(([key]) => key.split("/")[1]!);
-              const catFilter: unknown[] = activeSubcats.length > 0
-                ? ["in", ["get", "subcategory"], ["literal", activeSubcats]]
-                : ["==", 1, 0]; // no active subcats → show nothing
-
-              return (
-                <Source
-                  id="pois"
-                  type="geojson"
-                  data={poiGeoJSON as GeoJSON.FeatureCollection}
-                >
-                  {/* POI dots — filtered by active subcategories */}
-                  <Layer
-                    id="poi-dots"
-                    type="circle"
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    filter={catFilter as any}
-                    paint={{
-                      "circle-color": [
-                        "match",
-                        ["get", "category"],
-                        "transportation", "#E8B84A",
-                        "industrial",     "#C9922A",
-                        "commercial",     "#8A7B9A",
-                        "amenity",        "#A07B5E",
-                        "education",      "#5A8A7A",
-                        "government",     "#7B9EA7",
-                        "infrastructure", "#6A6A6A",
-                        "#888888",
-                      ],
-                      // Always-expression form avoids MapLibre type-switch errors
-                      // when hoveredPoiCat toggles between null and a string.
-                      "circle-radius": ["case",
-                        ["==", ["get", "category"], hoveredPoiCat ?? ""], 7, 4,
-                      ],
-                      "circle-opacity": ["case",
-                        ["==", ["get", "category"], hoveredPoiCat ?? ""], 1.0, 0.8,
-                      ],
-                      "circle-stroke-width": ["case",
-                        ["==", ["get", "category"], hoveredPoiCat ?? ""], 2, 1,
-                      ],
-                      "circle-stroke-color": "#0D0C0A",
-                    }}
-                  />
-                </Source>
-              );
-            })()}
-
-            {/* ── Regulatory zone hatched fill ──────────────────────────── */}
-            {regulatoryGeoJSON && toggles.regulatory && (
-              <Source id="regulatory" type="geojson" data={regulatoryGeoJSON as GeoJSON.FeatureCollection}>
-                <Layer
-                  id="regulatory-fill"
-                  type="fill"
-                  paint={{
-                    "fill-color": "#D45252",
-                    "fill-opacity": 0.12,
-                  }}
-                />
-                <Layer
-                  id="regulatory-outline"
-                  type="line"
-                  paint={{
-                    "line-color": "#D45252",
-                    "line-width": 1.5,
-                    "line-opacity": 0.8,
-                    "line-dasharray": [4, 2],
-                  }}
-                />
-              </Source>
-            )}
-
-            {/* ── Isochrone rings ────────────────────────────────────────── */}
-            {isochroneGeoJSON && toggles.isochrone && (
-              <Source id="isochrone" type="geojson" data={isochroneGeoJSON as GeoJSON.FeatureCollection}>
-                <Layer
-                  id="isochrone-fill"
-                  type="fill"
-                  paint={{
-                    "fill-color": [
-                      "match",
-                      ["get", "minutes"],
-                      15, "#4DB87A",
-                      30, "#E8B84A",
-                      60, "#D45252",
-                      "#888888",
-                    ],
-                    "fill-opacity": 0.1,
-                  }}
-                />
-                <Layer
-                  id="isochrone-outline"
-                  type="line"
-                  paint={{
-                    "line-color": [
-                      "match",
-                      ["get", "minutes"],
-                      15, "#4DB87A",
-                      30, "#E8B84A",
-                      60, "#D45252",
-                      "#888888",
-                    ],
-                    "line-width": 1.5,
-                    "line-opacity": 0.7,
-                  }}
-                />
-              </Source>
-            )}
-
-            {/* ── Draw polygon preview vertices ──────────────────────────── */}
-            {drawMode && drawVertices.length > 0 && (() => {
-              const previewGeojson: GeoJSON.FeatureCollection = {
-                type: "FeatureCollection",
-                features: [
-                  {
-                    type: "Feature",
-                    geometry: {
-                      type: "LineString",
-                      coordinates: drawVertices,
-                    },
-                    properties: {},
-                  },
-                  ...drawVertices.map(([lng, lat], i) => ({
-                    type: "Feature" as const,
-                    geometry: { type: "Point" as const, coordinates: [lng, lat] },
-                    properties: { i },
-                  })),
-                ],
-              };
-              return (
-                <Source id="draw-preview" type="geojson" data={previewGeojson}>
-                  <Layer
-                    id="draw-line"
-                    type="line"
-                    filter={["==", ["geometry-type"], "LineString"]}
-                    paint={{ "line-color": "#C9922A", "line-width": 2, "line-dasharray": [3, 2] }}
-                  />
-                  <Layer
-                    id="draw-verts"
-                    type="circle"
-                    filter={["==", ["geometry-type"], "Point"]}
-                    paint={{ "circle-color": "#C9922A", "circle-radius": 5, "circle-stroke-width": 1, "circle-stroke-color": "#fff" }}
-                  />
-                </Source>
-              );
-            })()}
-
-            {/* ── Selected site marker (on top of layers) ───────────────── */}
-            {markerCoords && (
-              <Marker longitude={markerCoords.lng} latitude={markerCoords.lat}>
-                <div
-                  style={{
-                    width: "14px",
-                    height: "14px",
-                    borderRadius: "50%",
-                    background: "var(--color-accent)",
-                    border: "2px solid var(--color-accent-bright)",
-                    boxShadow: "0 0 6px rgba(201,146,42,0.8)",
-                  }}
-                />
-              </Marker>
-            )}
-
-            {/* ── All saved sites as markers ─────────────────────────────── */}
-            {sites.map((s) => {
-              try {
-                const geom = JSON.parse(s.geometry_geojson);
-                if (geom.type !== "Point") return null;
-                const [lng, lat] = geom.coordinates;
-                return (
-                  <Marker
-                    key={s.id}
-                    longitude={lng}
-                    latitude={lat}
-                    onClick={() => handleSelectSite(s)}
-                  >
-                    <div
-                      title={s.name}
-                      style={{
-                        width: "8px",
-                        height: "8px",
-                        borderRadius: "50%",
-                        background:
-                          selectedSite?.id === s.id
-                            ? "var(--color-accent-bright)"
-                            : "var(--color-accent)",
-                        border: "1px solid var(--color-bg-canvas)",
-                        cursor: "pointer",
-                      }}
-                    />
-                  </Marker>
-                );
-              } catch {
-                return null;
-              }
-            })}
-
-            {/* ── POI click popup ───────────────────────────────────────────── */}
-            {poiPopup && (
-              <Popup
-                longitude={poiPopup.lng}
-                latitude={poiPopup.lat}
-                closeButton
-                closeOnClick={false}
-                onClose={() => setPoiPopup(null)}
-                anchor="bottom"
-                maxWidth="320px"
-              >
-                <div style={{
-                  fontFamily: "'IBM Plex Sans', sans-serif",
-                  fontSize: "12px",
-                  color: "#1a1a1a",
-                  lineHeight: 1.5,
-                  padding: "2px 0",
-                }}>
-                  {/* Header — subcategory label + color dot */}
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
-                    <div style={{
-                      width: "8px", height: "8px", borderRadius: "50%",
-                      background: poiColor(poiPopup.category), flexShrink: 0,
-                    }} />
-                    <span
-                      title={`${poiPopup.category} / ${poiPopup.subcategory}`}
-                      style={{
-                        fontSize: "9px", textTransform: "uppercase", letterSpacing: "0.12em",
-                        color: poiColor(poiPopup.category), fontWeight: 700,
-                      }}
-                    >
-                      {poiPopup.subcategory.replace(/_/g, " ")}
-                    </span>
-                  </div>
-
-                  {/* Name */}
-                  {(poiPopup.name_en || poiPopup.name_ar) ? (
-                    <div style={{ marginBottom: "8px" }}>
-                      {poiPopup.name_en && (
-                        <div style={{ fontWeight: 600, fontSize: "13px" }}>{poiPopup.name_en}</div>
-                      )}
-                      {poiPopup.name_ar && (
-                        <div style={{ color: "#555", direction: "rtl", fontSize: "12px" }}>{poiPopup.name_ar}</div>
-                      )}
-                    </div>
-                  ) : (
-                    <div style={{ color: "#999", fontStyle: "italic", marginBottom: "8px", fontSize: "12px" }}>Unnamed</div>
-                  )}
-
-                  <div style={{ borderTop: "1px solid #e5e5e5", marginBottom: "8px" }} />
-
-                  {/* Operator / Brand */}
-                  {(poiPopup.operator || poiPopup.brand) && (
-                    <div style={{ marginBottom: "4px" }}>
-                      <span style={{ color: "#888", fontSize: "10px" }}>Operator: </span>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px" }}>
-                        {poiPopup.operator && poiPopup.brand && poiPopup.operator !== poiPopup.brand
-                          ? `${poiPopup.operator} / ${poiPopup.brand}`
-                          : (poiPopup.operator ?? poiPopup.brand)}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Address */}
-                  {poiPopup.address && (
-                    <div style={{ marginBottom: "4px" }}>
-                      <span style={{ color: "#888", fontSize: "10px" }}>Address: </span>
-                      <span style={{ fontSize: "11px" }}>{poiPopup.address}</span>
-                    </div>
-                  )}
-
-                  {/* Contact row */}
-                  {(poiPopup.phone || poiPopup.website || poiPopup.opening_hours) && (
-                    <div style={{ marginBottom: "4px", display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
-                      {poiPopup.phone && (
-                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: "10px", color: "#444" }}>
-                          {poiPopup.phone}
-                        </span>
-                      )}
-                      {poiPopup.website && (
-                        <a
-                          href={poiPopup.website.startsWith("http") ? poiPopup.website : `https://${poiPopup.website}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ fontSize: "10px", color: "#C9922A", textDecoration: "none" }}
-                        >
-                          website ↗
-                        </a>
-                      )}
-                      {poiPopup.opening_hours && (
-                        <span style={{ fontSize: "10px", color: "#555" }}>
-                          {poiPopup.opening_hours === "24/7" ? "Open 24/7" : `Hours: ${poiPopup.opening_hours}`}
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Divider */}
-                  {(poiPopup.footprint_area_sqm || poiPopup.building_levels || poiPopup.height_m || poiPopup.capacity) && (
-                    <>
-                      <div style={{ borderTop: "1px solid #e5e5e5", marginBottom: "8px", marginTop: "4px" }} />
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginBottom: "4px" }}>
-                        {poiPopup.footprint_area_sqm && (
-                          <span style={{ fontSize: "11px" }}>
-                            <span style={{ color: "#888", fontSize: "10px" }}>Footprint: </span>
-                            <span style={{ fontVariantNumeric: "tabular-nums" }}>
-                              {Math.round(poiPopup.footprint_area_sqm).toLocaleString()} m²
-                            </span>
-                          </span>
-                        )}
-                        {poiPopup.building_levels && (
-                          <span style={{ fontSize: "11px" }}>
-                            <span style={{ color: "#888", fontSize: "10px" }}>Levels: </span>
-                            <span style={{ fontVariantNumeric: "tabular-nums" }}>{poiPopup.building_levels}</span>
-                          </span>
-                        )}
-                        {poiPopup.height_m && (
-                          <span style={{ fontSize: "11px" }}>
-                            <span style={{ color: "#888", fontSize: "10px" }}>Height: </span>
-                            <span style={{ fontVariantNumeric: "tabular-nums" }}>{poiPopup.height_m}m</span>
-                          </span>
-                        )}
-                        {poiPopup.capacity && (
-                          <span style={{ fontSize: "11px" }}>
-                            <span style={{ color: "#888", fontSize: "10px" }}>Capacity: </span>
-                            <span style={{ fontVariantNumeric: "tabular-nums" }}>{poiPopup.capacity.toLocaleString()}</span>
-                          </span>
-                        )}
-                      </div>
-                    </>
-                  )}
-
-                  {/* Footer */}
-                  <div style={{ borderTop: "1px solid #e5e5e5", marginTop: "6px", paddingTop: "6px" }}>
-                    <span style={{ fontSize: "9px", color: "#aaa" }}>
-                      Source: OpenStreetMap
-                      {poiPopup.last_seen_at && ` · verified ${new Date(poiPopup.last_seen_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`}
-                    </span>
-                  </div>
-                </div>
-              </Popup>
-            )}
-          </Map>
-
-          {/* Draw mode hint */}
-          {drawMode && (
-            <div style={{
-              position: "absolute",
-              top: "12px",
-              left: "50%",
-              transform: "translateX(-50%)",
-              background: "rgba(20,19,16,0.9)",
-              border: "1px solid var(--color-accent)",
-              color: "var(--color-accent)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "9px",
-              letterSpacing: "0.1em",
-              padding: "4px 12px",
-              zIndex: 3,
-              textTransform: "uppercase",
-            }}>
-              {drawVertices.length < 3
-                ? `Click to add vertices (${drawVertices.length} so far, need 3+)`
-                : "Double-click to close polygon"}
-              {drawVertices.length > 0 && (
-                <button
-                  onClick={() => { setDrawVertices([]); }}
-                  style={{ marginLeft: "10px", background: "none", border: "none", color: "var(--color-negative)", cursor: "pointer", fontSize: "9px", fontFamily: "var(--font-mono)" }}
-                >
-                  clear
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Velocity hover tooltip */}
-          {velocityTooltip && (
-            <div
-              style={{
-                position: "absolute",
-                left: velocityTooltip.x + 12,
-                top: velocityTooltip.y - 10,
-                background: "rgba(20,19,16,0.95)",
-                border: "1px solid var(--color-border-default)",
-                padding: "6px 10px",
-                zIndex: 4,
-                pointerEvents: "none",
-                minWidth: "160px",
-              }}
-            >
-              <div style={{ fontSize: "10px", color: "var(--color-text-primary)", marginBottom: "4px" }}>
-                {lang === "ar" && velocityTooltip.districtAr
-                  ? velocityTooltip.districtAr
-                  : velocityTooltip.district}
-              </div>
-              <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", display: "flex", flexDirection: "column", gap: "2px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
-                  <span>Transactions</span>
-                  <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-text-secondary)" }}>
-                    {velocityTooltip.txCount}
-                  </span>
-                </div>
-                {velocityTooltip.pricePerSqm != null && (
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
-                    <span>SAR/sqm</span>
-                    <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-text-secondary)" }}>
-                      {velocityTooltip.pricePerSqm.toFixed(0)}
-                    </span>
-                  </div>
-                )}
-                {velocityTooltip.latestMonth && (
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "12px" }}>
-                    <span>Latest</span>
-                    <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--color-text-secondary)" }}>
-                      {velocityTooltip.latestMonth}
-                    </span>
-                  </div>
-                )}
-                <div style={{ marginTop: "2px", color: "var(--color-text-tertiary)", fontStyle: "italic" }}>
-                  {velocityWindow}d window · {velocityAssetClass || "all types"}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Velocity legend (bottom-right, shown when velocity layer active) */}
-          {toggles.velocity && (
-            <div
-              style={{
-                position: "absolute",
-                bottom: "40px",
-                right: "12px",
-                background: "rgba(20,19,16,0.88)",
-                border: "1px solid var(--color-border-subtle)",
-                padding: "8px 10px",
-                zIndex: 2,
-                minWidth: "160px",
-              }}
-            >
-              <div style={{ fontSize: "9px", color: "var(--color-text-tertiary)", marginBottom: "6px", letterSpacing: "0.08em" }}>
-                Transaction density · last {velocityWindow}d
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "3px" }}>
-                {[0.05, 0.2, 0.4, 0.65, 0.85].map((opacity, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      flex: 1,
-                      height: "8px",
-                      background: `rgba(201,146,42,${opacity})`,
-                    }}
-                  />
-                ))}
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "8px", color: "var(--color-text-tertiary)", fontVariantNumeric: "tabular-nums" }}>
-                <span>0</span>
-                <span>Low</span>
-                <span>High</span>
-              </div>
-              {velocityRows.length === 0 && (
-                <div style={{ marginTop: "4px", fontSize: "8px", color: "var(--color-accent)", fontStyle: "italic" }}>
-                  No data — awaiting REGA Open Data
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Layer toggle controls */}
-          <LayerControls
-            toggles={toggles}
-            onChange={setToggle}
-            poiState={poiState}
-            onPoiSubcat={setPoiSubcat}
-            onPoiCat={setPoiCat}
-            drawMode={drawMode}
-            onDrawMode={setDrawMode}
-            velocityWindow={velocityWindow}
-            onVelocityWindow={setVelocityWindow}
-            velocityAssetClass={velocityAssetClass}
-            onVelocityAssetClass={setVelocityAssetClass}
-            isoProfile={isoProfile}
-            onIsoProfile={setIsoProfile}
-            isoError={isoError}
-          />
-
-          {/* POI legend (shown when POI layer is on) — only active categories */}
-          {toggles.pois && (
-            <div
-              style={{
-                position: "absolute",
-                bottom: "12px",
-                left: "12px",
-                background: "rgba(20,19,16,0.88)",
-                border: "1px solid var(--color-border-subtle)",
-                padding: "8px 10px",
-                zIndex: 2,
-              }}
-            >
-              {(Object.entries(POI_CAT_COLORS) as [string, string][])
-                .filter(([cat]) => catToggleState(cat, poiState) !== "none")
-                .map(([cat, color]) => (
-                <div
-                  key={cat}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    marginBottom: "3px",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "8px",
-                      height: "8px",
-                      borderRadius: "50%",
-                      background: color,
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span style={{ fontSize: "9px", color: "var(--color-text-tertiary)" }}>
-                    {cat}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
+        {/* Plot pin overlay */}
+        <div style={{
+          position: "absolute", top: "38%", left: "32%", pointerEvents: "none",
+          padding: "6px 10px", background: "#fff", border: "1px solid var(--brand-navy)",
+          fontSize: 11, fontWeight: 500, color: "var(--brand-navy)",
+          boxShadow: "0 2px 8px rgba(0,32,96,0.15)",
+        }}>
+          ul. Towarowa 28 · Wola
         </div>
 
-        {/* Right: Evaluation panel (saved site, ad-hoc click, or empty state) */}
-        {selectedSite || adHocGeom ? (
-          <EvalPanel
-            site={selectedSite}
-            adHocGeom={adHocGeom}
-            onClear={() => {
-              setSelectedSite(null);
-              setAdHocGeom(null);
-              setMarkerCoords(null);
-            }}
-            onPoiHover={setHoveredPoiCat}
-          />
-        ) : (
-          <div
-            style={{
-              width: "360px",
-              flexShrink: 0,
-              borderLeft: "1px solid var(--color-border-subtle)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "24px",
-            }}
-          >
-            <div
-              style={{
-                fontSize: "11px",
-                color: "var(--color-text-tertiary)",
-                textAlign: "center",
-                lineHeight: 1.5,
-              }}
-            >
-              Click any point on the map to evaluate a site, or select a saved site from the left rail.
-            </div>
-          </div>
-        )}
+        <MapControls compareOn={compareOn} onToggle={() => setCompareOn(v => !v)} />
       </div>
+
+      {/* Right rail */}
+      {compareOn ? <PlotCompareView /> : <PlotEvaluation />}
     </div>
   );
 }

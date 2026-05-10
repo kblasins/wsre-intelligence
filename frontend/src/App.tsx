@@ -5,10 +5,10 @@ import { BriefsPage } from "./pages/BriefsPage";
 import { AdminPage } from "./pages/AdminPage";
 import { WorkbenchPage } from "./pages/WorkbenchPage";
 import { IntelligencePage } from "./pages/IntelligencePage";
-import { IndustrialMarketPage } from "./pages/IndustrialMarketPage";
+import { CommercialMarketPage } from "./pages/CommercialMarketPage";
+import { PrimaryMarketPage } from "./pages/PrimaryMarketPage";
 import { SubmarketsPage } from "./pages/SubmarketsPage";
 import { formatDate } from "./lib/format";
-import { useBudgetStatus } from "./hooks/useMarketData";
 
 // ── Auth guard ────────────────────────────────────────────────────────────────
 
@@ -21,12 +21,18 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 // ── Command bar (⌘K) ─────────────────────────────────────────────────────────
 
 const CMD_ITEMS = [
-  { group: "Navigate", label: "Workbench",        kbd: "1", path: "/workbench"   },
-  { group: "Navigate", label: "Industrial Market", kbd: "2", path: "/industrial"  },
-  { group: "Navigate", label: "Submarkets",        kbd: "3", path: "/submarkets"  },
-  { group: "Navigate", label: "Briefs",            kbd: "4", path: "/briefs"      },
-  { group: "Navigate", label: "Intelligence Feed", kbd: "5", path: "/intelligence"},
-  { group: "Navigate", label: "Admin",             kbd: "6", path: "/admin"       },
+  { group: "Navigate", label: "Workbench",              kbd: "1", path: "/workbench"   },
+  { group: "Navigate", label: "Commercial Market",      kbd: "2", path: "/commercial"  },
+  { group: "Navigate", label: "Primary Market",         kbd: "3", path: "/primary"     },
+  { group: "Navigate", label: "Submarkets",             kbd: "4", path: "/submarkets"  },
+  { group: "Navigate", label: "Briefs",                 kbd: "5", path: "/briefs"      },
+  { group: "Navigate", label: "Intelligence Feed",      kbd: "6", path: "/intelligence"},
+  { group: "Navigate", label: "Admin",                  kbd: "7", path: "/admin"       },
+  { group: "Saved sites", label: "Wola Office Corridor",    kbd: "", path: "/workbench" },
+  { group: "Saved sites", label: "Mokotów Służewiec",       kbd: "", path: "/workbench" },
+  { group: "Saved sites", label: "Praga-Północ riverfront", kbd: "", path: "/workbench" },
+  { group: "Actions", label: "Generate weekly Warsaw brief", kbd: "", path: "/briefs"   },
+  { group: "Actions", label: "Open review queue",            kbd: "", path: "/admin"    },
 ];
 
 function CommandBar({ onClose }: { onClose: () => void }) {
@@ -34,7 +40,7 @@ function CommandBar({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState("");
 
   const items = q
-    ? CMD_ITEMS.filter((i) => i.label.toLowerCase().includes(q.toLowerCase()))
+    ? CMD_ITEMS.filter((i) => (i.label + " " + i.group).toLowerCase().includes(q.toLowerCase()))
     : CMD_ITEMS;
 
   const groups = [...new Set(items.map((i) => i.group))];
@@ -51,18 +57,17 @@ function CommandBar({ onClose }: { onClose: () => void }) {
     <div className="cmd-scrim" onClick={onClose}>
       <div className="cmd-panel" onClick={(e) => e.stopPropagation()}>
         <div className="cmd-input-row">
-          <span style={{ color: "var(--text-tertiary)", fontSize: "13px" }}>⌘</span>
           <input
             className="cmd-input"
             autoFocus
-            placeholder="Go to page, search saved sites…"
+            placeholder="Search sites, screens, actions…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
-          <span className="cmd-kbd">ESC</span>
+          <span className="cmd-kbd">esc</span>
         </div>
         <div className="cmd-list">
-          {items.length === 0 && <div className="cmd-empty">No results</div>}
+          {items.length === 0 && <div className="cmd-empty">No matches.</div>}
           {groups.map((group) => (
             <div className="cmd-group" key={group}>
               <div className="cmd-group-label">{group}</div>
@@ -70,12 +75,12 @@ function CommandBar({ onClose }: { onClose: () => void }) {
                 .filter((i) => i.group === group)
                 .map((item) => (
                   <div
-                    key={item.path}
+                    key={item.label}
                     className="cmd-item"
                     onClick={() => { navigate(item.path); onClose(); }}
                   >
                     <span>{item.label}</span>
-                    <span className="cmd-kbd">{item.kbd}</span>
+                    {item.kbd && <span className="cmd-kbd">{item.kbd}</span>}
                   </div>
                 ))}
             </div>
@@ -84,34 +89,28 @@ function CommandBar({ onClose }: { onClose: () => void }) {
         <div className="cmd-foot">
           <span><span className="cmd-kbd">↑↓</span> navigate</span>
           <span><span className="cmd-kbd">↵</span> open</span>
-          <span><span className="cmd-kbd">ESC</span> close</span>
+          <span><span className="cmd-kbd">1–7</span> jump to tab</span>
         </div>
       </div>
     </div>
   );
 }
 
-// ── App shell (shared chrome) ─────────────────────────────────────────────────
-
-const NAV_TABS = [
-  { label: "Workbench",         path: "/workbench",    kbd: "1" },
-  { label: "Industrial Market", path: "/industrial",   kbd: "2" },
-  { label: "Submarkets",        path: "/submarkets",   kbd: "3" },
-  { label: "Briefs",            path: "/briefs",       kbd: "4" },
-  { label: "Intelligence Feed", path: "/intelligence", kbd: "5" },
-  { label: "Admin",             path: "/admin",        kbd: "6" },
-];
+// ── App shell ─────────────────────────────────────────────────────────────────
 
 function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const [cmdOpen, setCmdOpen] = useState(false);
-  const { data: budget } = useBudgetStatus();
+  const [lang, setLang] = useState<"EN" | "PL">("EN");
+  const [marketsOpen, setMarketsOpen] = useState(false);
   const today = formatDate(new Date());
 
   const openCmd = useCallback(() => setCmdOpen(true), []);
 
-  // Keyboard shortcuts: ⌘K / number keys 1-6
+  const inMarkets = location.pathname.startsWith("/commercial") || location.pathname.startsWith("/primary");
+
+  // Keyboard shortcuts: ⌘K / number keys 1-7
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -120,10 +119,11 @@ function AppShell() {
         return;
       }
       if (cmdOpen) return;
-      const tab = NAV_TABS.find((t) => t.kbd === e.key);
-      if (tab && !e.metaKey && !e.ctrlKey && !e.altKey && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)) {
-        navigate(tab.path);
-      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const paths = ["/workbench", "/commercial", "/primary", "/submarkets", "/briefs", "/intelligence", "/admin"];
+      const idx = parseInt(e.key, 10) - 1;
+      if (idx >= 0 && idx < paths.length) navigate(paths[idx]!);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -134,34 +134,36 @@ function AppShell() {
     navigate("/login", { replace: true });
   }
 
-  const activeTab = NAV_TABS.find((t) => location.pathname.startsWith(t.path));
-
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg-page)", display: "flex", flexDirection: "column" }}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className="ws-header">
-        <span className="ws-brand">WSRE Intelligence</span>
-        <div className="ws-vr" />
-        <span className="ws-context">Riyadh Industrial</span>
+        {/* Left: wordmark + context */}
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 22, height: 22, background: "var(--brand-navy)", color: "#fff",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: "IBM Plex Mono", fontSize: 9, fontWeight: 600, letterSpacing: "0.5px",
+            }}>WS</div>
+            <span style={{ fontSize: 16, fontWeight: 500, color: "var(--text-heading)" }}>WSRE Intelligence</span>
+          </div>
+          <div className="ws-vr" />
+          <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>Warsaw</span>
+        </div>
 
+        {/* Right */}
         <div className="ws-right">
-          {/* Budget indicator */}
-          {budget && (
-            <span style={{ fontSize: "12px", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>
-              <span style={{ color: budget.budget_pct > 80 ? "var(--down)" : "var(--text-primary)" }}>
-                ${budget.today_usd.toFixed(2)}
-              </span>
-              {" / "}${budget.daily_cap_usd}
-            </span>
-          )}
+          <span className="ws-date tnum">{today} · CEST</span>
 
-          {/* ⌘K command bar button */}
-          <button className="ws-cmd-btn" onClick={openCmd}>
-            <span>Search</span>
-            <kbd>⌘K</kbd>
-          </button>
-
-          <span className="ws-date">{today}</span>
+          <div
+            className="ws-lang"
+            onClick={() => setLang(lang === "EN" ? "PL" : "EN")}
+          >
+            <span className={lang === "EN" ? "on" : ""}>EN</span>
+            <span style={{ margin: "0 2px", color: "var(--text-tertiary)" }}>/</span>
+            <span className={lang === "PL" ? "on" : ""}>PL</span>
+          </div>
 
           <button
             onClick={handleLogout}
@@ -169,7 +171,6 @@ function AppShell() {
               background: "transparent", border: "1px solid var(--border)",
               color: "var(--text-secondary)", fontFamily: "inherit",
               fontSize: "12px", padding: "3px 10px", cursor: "pointer",
-              borderRadius: "3px",
             }}
           >
             Sign out
@@ -181,16 +182,69 @@ function AppShell() {
 
       {/* ── Nav ────────────────────────────────────────────────────────────── */}
       <nav className="ws-nav">
-        {NAV_TABS.map((tab) => (
-          <button
-            key={tab.path}
-            className={`tab${activeTab?.path === tab.path ? " active" : ""}`}
-            onClick={() => navigate(tab.path)}
+        <a
+          className={"tab" + (location.pathname.startsWith("/workbench") ? " active" : "")}
+          onClick={() => navigate("/workbench")}
+        >Workbench</a>
+
+        {/* Markets dropdown */}
+        <div
+          style={{ position: "relative", display: "flex", alignItems: "stretch" }}
+          onMouseEnter={() => setMarketsOpen(true)}
+          onMouseLeave={() => setMarketsOpen(false)}
+        >
+          <a
+            className={"tab" + (inMarkets ? " active" : "")}
+            onClick={() => navigate("/commercial")}
+            style={{ display: "flex", alignItems: "center" }}
           >
-            {tab.label}
-            <span className="count">{tab.kbd}</span>
-          </button>
-        ))}
+            Markets <span style={{ marginLeft: 5, fontSize: 9, color: "var(--text-tertiary)" }}>▾</span>
+          </a>
+          {marketsOpen && (
+            <div style={{
+              position: "absolute", top: "100%", left: 0, minWidth: 240,
+              background: "#fff", border: "1px solid var(--border)",
+              borderTop: "2px solid var(--brand-navy)",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.06)", zIndex: 50,
+            }}>
+              {[
+                { key: "/commercial", label: "Commercial Market" },
+                { key: "/primary", label: "Primary Residential Market" },
+              ].map(c => (
+                <a
+                  key={c.key}
+                  onClick={() => { navigate(c.key); setMarketsOpen(false); }}
+                  style={{
+                    display: "block", padding: "12px 18px", fontSize: 13,
+                    color: location.pathname === c.key ? "var(--brand-navy)" : "var(--text-primary)",
+                    background: location.pathname === c.key ? "var(--bg-wash)" : "#fff",
+                    cursor: "pointer", fontWeight: location.pathname === c.key ? 500 : 400,
+                    borderBottom: "1px solid var(--divider)",
+                  }}
+                >
+                  {c.label}
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <a
+          className={"tab" + (location.pathname.startsWith("/submarkets") ? " active" : "")}
+          onClick={() => navigate("/submarkets")}
+        >Submarkets</a>
+        <a
+          className={"tab" + (location.pathname.startsWith("/briefs") ? " active" : "")}
+          onClick={() => navigate("/briefs")}
+        >Briefs</a>
+        <a
+          className={"tab" + (location.pathname.startsWith("/intelligence") ? " active" : "")}
+          onClick={() => navigate("/intelligence")}
+        >Intelligence Feed</a>
+        <a
+          className={"tab" + (location.pathname.startsWith("/admin") ? " active" : "")}
+          onClick={() => navigate("/admin")}
+        >Admin <span className="count">9</span></a>
       </nav>
 
       {/* ── Page content ───────────────────────────────────────────────────── */}
@@ -219,14 +273,17 @@ export default function App() {
         }
       >
         <Route index element={<Navigate to="/workbench" replace />} />
-        <Route path="dashboard" element={<Navigate to="/industrial" replace />} />
+        <Route path="dashboard"    element={<Navigate to="/workbench" replace />} />
         <Route path="workbench"    element={<WorkbenchPage />} />
-        <Route path="industrial"   element={<IndustrialMarketPage />} />
+        <Route path="commercial"   element={<CommercialMarketPage />} />
+        <Route path="primary"      element={<PrimaryMarketPage />} />
         <Route path="submarkets"   element={<SubmarketsPage />} />
         <Route path="briefs"       element={<BriefsPage />} />
         <Route path="intelligence" element={<IntelligencePage />} />
         <Route path="admin"        element={<AdminPage />} />
-        <Route path="*" element={<Navigate to="/workbench" replace />} />
+        {/* Legacy redirects */}
+        <Route path="industrial"   element={<Navigate to="/commercial" replace />} />
+        <Route path="*"            element={<Navigate to="/workbench" replace />} />
       </Route>
     </Routes>
   );

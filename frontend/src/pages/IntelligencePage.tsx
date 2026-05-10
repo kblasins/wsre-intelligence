@@ -1,306 +1,184 @@
-/**
- * IntelligencePage — filterable feed of all typed facts
- * extracted from news articles across 8 signal tables.
- *
- * Route: /intelligence
- */
+// Intelligence Feed — Polish-source ingestion stream
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../lib/api";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface FactItem {
-  id: number;
-  table: string;
-  created_at: string | null;
-  confidence: number | null;
-  source_citation: string | null;
-  article_id: number | null;
-  summary: string | null;
-}
-
-interface FactsResponse {
-  total: number;
-  items: FactItem[];
-}
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const ALL_TABLES = [
-  "supply_events",
-  "regulatory_events",
-  "macro_signals",
-  "demand_signals",
-  "capital_markets_events",
-  "infrastructure_events",
-  "tenant_signals",
-  "market_commentary",
+const sources = [
+  { n: "Eurobuild CEE",         type: "Trade press",  cov: "Office, retail, capital",     lang: "EN/PL", count: 142, last: "04:18", auth: "AAA", note: "Strongest Warsaw office desk." },
+  { n: "Property Forum",        type: "Trade press",  cov: "Office, residential",          lang: "EN/PL", count:  98, last: "05:42", auth: "AA",  note: "" },
+  { n: "Money.pl",              type: "Mainstream",   cov: "Macro, regulatory",            lang: "PL",    count:  76, last: "06:01", auth: "A",   note: "" },
+  { n: "Bankier",               type: "Mainstream",   cov: "Capital markets, REITs",       lang: "PL",    count:  64, last: "05:28", auth: "AA",  note: "" },
+  { n: "Rzeczpospolita · NRC",  type: "Newspaper",    cov: "Capital, regulatory",          lang: "PL",    count:  48, last: "05:14", auth: "AAA", note: "Long-form analysis priority." },
+  { n: "Puls Biznesu",          type: "Newspaper",    cov: "Corporate, M&A",               lang: "PL",    count:  41, last: "06:08", auth: "AA",  note: "" },
+  { n: "Forbes Polska",         type: "Magazine",     cov: "Capital markets, profile",     lang: "PL",    count:  22, last: "yesterday", auth: "A", note: "" },
+  { n: "Dziennik Gazeta Prawna",type: "Newspaper",    cov: "Regulatory, courts",           lang: "PL",    count:  38, last: "05:51", auth: "AAA", note: "MPZP & UOKiK rulings." },
+  { n: "Sejm RP · druk",        type: "Government",   cov: "Legislation",                  lang: "PL",    count:  14, last: "yesterday", auth: "AAA", note: "Bill texts & reading status." },
+  { n: "NBP",                   type: "Government",   cov: "Macro, MIR, FX fixings",       lang: "PL/EN", count:  28, last: "02:00", auth: "AAA", note: "" },
+  { n: "GUS",                   type: "Government",   cov: "Demographics, completions",    lang: "PL/EN", count:  32, last: "yesterday", auth: "AAA", note: "" },
+  { n: "MRiT · Jawność feed",   type: "Government",   cov: "Primary developer prices",     lang: "PL",    count: 412, last: "06:14", auth: "AAA", note: "Statutory feed · 15-min cadence." },
+  { n: "WSE · GPW",             type: "Government",   cov: "Listed-RE quotes",             lang: "PL/EN", count:  54, last: "05:35", auth: "AAA", note: "15-min delayed." },
+  { n: "JLL Poland · publishing",type:"Consultancy",  cov: "Office, capital, research",   lang: "EN/PL", count:  18, last: "yesterday", auth: "AA", note: "Quarterly & ad-hoc reports." },
+  { n: "CBRE Poland · publishing",type:"Consultancy", cov: "Office, logistics, retail",   lang: "EN/PL", count:  16, last: "yesterday", auth: "AA", note: "" },
+  { n: "Internal · WSRE field", type: "Proprietary",  cov: "Broker, deal whisper",         lang: "EN",    count:  26, last: "04:42", auth: "AA",  note: "Manually verified." },
 ];
 
-const TABLE_LABELS: Record<string, string> = {
-  supply_events:           "Supply",
-  regulatory_events:       "Regulatory",
-  macro_signals:           "Macro",
-  demand_signals:          "Demand",
-  capital_markets_events:  "Capital Mkts",
-  infrastructure_events:   "Infrastructure",
-  tenant_signals:          "Tenant",
-  market_commentary:       "Commentary",
-};
+const facts = [
+  { ts: "06:14", src: "MRiT · Jawność feed",      t: "transaction", txt: "Echo Investment repriced 8 units in Stacja Wola etap III (+2.34% to PLN 21,900/m²).",               tags: ["Echo Investment","Wola","Primary"],          conf: 5 },
+  { ts: "06:08", src: "Eurobuild CEE",             t: "transaction", txt: "Allianz Real Estate completed Generation Park Y acquisition · €119.1m · 5.85% yield.",              tags: ["Allianz","Skanska","Wola","Capital markets"], conf: 5 },
+  { ts: "06:02", src: "NBP",                       t: "sentiment",   txt: "NBP daily EUR/PLN fixing 4.2840 (+0.04% DoD).",                                                     tags: ["FX","Macro"],                                conf: 5 },
+  { ts: "05:51", src: "Dziennik Gazeta Prawna",    t: "sentiment",   txt: "WSA Warsaw decision on Czyste-Towarowa MPZP appeals to be published 18 Apr.",                      tags: ["MPZP","Wola","Regulatory"],                  conf: 4 },
+  { ts: "05:42", src: "Property Forum",            t: "listing",     txt: "Skanska Property lists Studio B floors 8–12 (4,800 sqm) at €25.50/sqm/mo asking.",                  tags: ["Skanska","Wola","Office"],                   conf: 5 },
+  { ts: "05:35", src: "GPW",                       t: "sentiment",   txt: "GTC opens at PLN 7.84 (+0.51%) on volume 142k shares.",                                             tags: ["GTC","Listed RE"],                           conf: 5 },
+  { ts: "05:28", src: "Bankier",                   t: "sentiment",   txt: "PFA-Norway press release confirms Forest Tower closing on Friday.",                                   tags: ["PFA","Wola","Capital markets"],              conf: 5 },
+  { ts: "05:14", src: "Rzeczpospolita · NRC",      t: "sentiment",   txt: "FINN bill amendments tabled overnight — distribution mandate raised from 85% to 90%.",              tags: ["FINN","REIT","Regulatory"],                  conf: 4 },
+  { ts: "04:42", src: "Internal · WSRE field",     t: "transaction", txt: "Broker indicates Empark Mokotów Phase II quietly to market with PineBridge BE — guide €92m at 7.40%.", tags: ["Mokotów","PineBridge","Capital markets"],conf: 3 },
+  { ts: "04:18", src: "Eurobuild CEE",             t: "sentiment",   txt: "Citi BPO confirms V.Offices renewal + 3,000 sqm expansion (effective 1 May 2026).",                 tags: ["Citi","Mokotów","Office demand"],             conf: 5 },
+  { ts: "03:55", src: "JLL Poland · publishing",   t: "sentiment",   txt: "JLL Q1 office report: prime CBD rent EUR 27.00/sqm/mo unchanged QoQ; vacancy 11.2% (-30 bps).",    tags: ["Office","CBD","JLL"],                        conf: 5 },
+  { ts: "02:12", src: "MRiT · Jawność feed",       t: "transaction", txt: "Marvipol repriced 6 units in Unisono Wola (+2.23% to PLN 22,900/m²).",                              tags: ["Marvipol","Wola","Primary"],                 conf: 5 },
+  { ts: "yesterday", src: "Sejm RP · druk",        t: "sentiment",   txt: "FINN bill (druk 412) referred to second reading.",                                                  tags: ["FINN","Regulatory"],                         conf: 5 },
+  { ts: "yesterday", src: "GUS",                   t: "sentiment",   txt: "Q1 office completions Warsaw: 142,000 sqm (CEE-leading).",                                          tags: ["Macro","Pipeline"],                          conf: 5 },
+];
 
-const TABLE_PILL_CLASS: Record<string, string> = {
-  supply_events:           "supply",
-  regulatory_events:       "regulatory",
-  macro_signals:           "macro",
-  demand_signals:          "demand",
-  capital_markets_events:  "capital",
-  infrastructure_events:   "infra",
-  tenant_signals:          "tenant",
-  market_commentary:       "commentary",
-};
-
-const PAGE_SIZE = 50;
-
-// ── Hook ──────────────────────────────────────────────────────────────────────
-
-function useIntelligenceFacts(params: {
-  table: string | null;
-  minConfidence: number;
-  q: string;
-  offset: number;
-}) {
-  const searchParams = new URLSearchParams({
-    min_confidence: String(params.minConfidence),
-    limit: String(PAGE_SIZE),
-    offset: String(params.offset),
-  });
-  if (params.table) searchParams.set("table", params.table);
-  if (params.q) searchParams.set("q", params.q);
-
-  return useQuery<FactsResponse>({
-    queryKey: ["intelligence-facts", params],
-    queryFn: () => api.get<FactsResponse>(`/api/intelligence/facts?${searchParams}`),
-    placeholderData: (prev) => prev,
-  });
-}
-
-// ── Components ────────────────────────────────────────────────────────────────
-
-function ConfDots({ confidence }: { confidence: number | null }) {
-  const c = Math.min(5, Math.max(0, Math.round(confidence ?? 0)));
+function ConfDots({ n }: { n: number }) {
   return (
-    <span className="conf">
-      {[1, 2, 3, 4, 5].map((i) => (
-        <i key={i} className={i <= c ? "on" : ""} />
+    <div style={{ display: "inline-flex", gap: 2 }}>
+      {[1, 2, 3, 4, 5].map(i => (
+        <div key={i} style={{
+          width: 6, height: 6, borderRadius: "50%",
+          background: i <= n ? "var(--brand-navy)" : "var(--border)",
+        }} />
       ))}
-    </span>
+    </div>
   );
 }
 
-function formatDate(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-}
-
-// ── Main Page ─────────────────────────────────────────────────────────────────
-
 export function IntelligencePage() {
-  const [activeTable, setActiveTable] = useState<string | null>(null);
-  const [minConfidence, setMinConfidence] = useState(4);
-  const [q, setQ] = useState("");
-  const [debouncedQ, setDebouncedQ] = useState("");
-  const [offset, setOffset] = useState(0);
+  const [activeType, setActiveType] = useState("all");
+  const [activeSrc, setActiveSrc] = useState<string | null>(null);
 
-  const { data, isFetching } = useIntelligenceFacts({
-    table: activeTable,
-    minConfidence,
-    q: debouncedQ,
-    offset,
+  const filtered = facts.filter(f => {
+    if (activeType !== "all" && f.t !== activeType) return false;
+    if (activeSrc && f.src !== activeSrc) return false;
+    return true;
   });
 
-  const total = data?.total ?? 0;
-  const items = data?.items ?? [];
-  const totalPages = Math.ceil(total / PAGE_SIZE);
-  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
-
-  function handleSearch(value: string) {
-    setQ(value);
-    clearTimeout((window as any)._iqTimer);
-    (window as any)._iqTimer = setTimeout(() => {
-      setDebouncedQ(value);
-      setOffset(0);
-    }, 300);
-  }
-
-  function handleTableFilter(tbl: string | null) {
-    setActiveTable(tbl);
-    setOffset(0);
-  }
-
-  function handleConfidence(val: number) {
-    setMinConfidence(val);
-    setOffset(0);
-  }
+  const totalCount = sources.reduce((a, s) => a + s.count, 0);
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", background: "var(--bg-page)" }}>
-      <div style={{ maxWidth: "1400px", margin: "0 auto", padding: "24px 32px 64px" }}>
+    <div style={{ display: "flex", height: "calc(100vh - 100px)", overflow: "hidden" }}>
+      {/* Left rail — sources */}
+      <aside style={{ width: 340, background: "#fff", borderRight: "1px solid var(--border)", overflowY: "auto", flexShrink: 0 }}>
+        <div style={{ padding: "20px 22px 14px", borderBottom: "1px solid var(--divider)" }}>
+          <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Sources</h2>
+          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4 }}>
+            16 active feeds · {totalCount.toLocaleString()} facts last 7d
+          </div>
+        </div>
+        <div>
+          <button
+            onClick={() => setActiveSrc(null)}
+            style={{
+              width: "100%", textAlign: "left", padding: "10px 22px",
+              border: "none",
+              background: !activeSrc ? "var(--bg-selected)" : "transparent",
+              cursor: "pointer", fontFamily: "inherit", fontSize: 13,
+              color: !activeSrc ? "var(--brand-navy)" : "var(--text-primary)",
+              borderBottom: "1px solid var(--divider)",
+              boxShadow: !activeSrc ? "inset 2px 0 0 var(--brand-navy)" : "none",
+              fontWeight: !activeSrc ? 500 : 400,
+            }}
+          >
+            All sources <span className="tnum" style={{ float: "right", color: "var(--text-secondary)" }}>{totalCount}</span>
+          </button>
+          {sources.map(s => (
+            <button
+              key={s.n}
+              onClick={() => setActiveSrc(s.n === activeSrc ? null : s.n)}
+              style={{
+                width: "100%", textAlign: "left", padding: "10px 22px",
+                border: "none",
+                background: activeSrc === s.n ? "var(--bg-selected)" : "transparent",
+                cursor: "pointer", fontFamily: "inherit",
+                borderBottom: "1px solid var(--divider)",
+                boxShadow: activeSrc === s.n ? "inset 2px 0 0 var(--brand-navy)" : "none",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: activeSrc === s.n ? 500 : 400 }}>{s.n}</div>
+                <div className="tnum" style={{ fontSize: 11, color: "var(--text-secondary)" }}>{s.count}</div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{s.type} · {s.lang}</div>
+                <div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{s.last}</div>
+              </div>
+              {s.note && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 3, fontStyle: "italic" }}>{s.note}</div>}
+              <span style={{
+                display: "inline-block", marginTop: 4,
+                fontSize: 10, padding: "1px 5px", border: "1px solid",
+                borderColor: s.auth === "AAA" ? "var(--brand-navy)" : s.auth === "AA" ? "var(--text-secondary)" : "var(--text-tertiary)",
+                color: s.auth === "AAA" ? "var(--brand-navy)" : s.auth === "AA" ? "var(--text-secondary)" : "var(--text-tertiary)",
+              }}>{s.auth}</span>
+            </button>
+          ))}
+        </div>
+        {/* Methodology footer */}
+        <div style={{ padding: "16px 22px 20px", fontSize: 11, color: "var(--text-secondary)", borderTop: "1px solid var(--border)" }}>
+          <div className="ws-upper" style={{ marginBottom: 6 }}>Methodology</div>
+          <div style={{ lineHeight: 1.55, marginBottom: 12 }}>
+            Facts ingested every 60s. Polish sources translated to EN by domain-tuned model; original PL preserved on hover. Each fact tagged for entity, district, and asset class via NER. Confidence rests on source authority × corroboration count.
+          </div>
+          <div className="ws-upper" style={{ marginBottom: 6 }}>Authority</div>
+          <div style={{ lineHeight: 1.6 }}>
+            <strong>AAA</strong> — government statutory / regulated<br />
+            <strong>AA</strong> — specialist trade press + consultancy<br />
+            <strong>A</strong> — mainstream business press<br />
+            <strong>BBB</strong> — social / unverified
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <div className="ws-upper" style={{ marginBottom: 6 }}>Coverage</div>
+            <div style={{ lineHeight: 1.55 }}>
+              No scraping of residential listing portals (OtoDom, Domiporta). Primary residential prices sourced exclusively from the MRiT Jawność statutory feed.
+            </div>
+          </div>
+        </div>
+      </aside>
 
-        {/* Page heading */}
-        <div style={{ marginBottom: "20px", display: "flex", alignItems: "baseline", gap: "16px" }}>
-          <h1 className="ws-page-title">Intelligence Feed</h1>
-          <span className="ws-meta">
-            {total.toLocaleString()} facts
-            {isFetching && " · loading…"}
+      {/* Main feed */}
+      <div style={{ flex: 1, overflowY: "auto", background: "#fff" }}>
+        {/* Filter bar */}
+        <div style={{ padding: "14px 24px", borderBottom: "1px solid var(--border)", display: "flex", gap: 8, alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 5 }}>
+          <span style={{ fontSize: 11, color: "var(--text-secondary)", marginRight: 4 }}>Type:</span>
+          {["all", "transaction", "listing", "sentiment", "regulatory"].map(t => (
+            <span key={t} className={"chip" + (activeType === t ? " active" : "")} onClick={() => setActiveType(t)} style={{ fontSize: 11 }}>
+              {t === "all" ? "All" : t.charAt(0).toUpperCase() + t.slice(1)}
+            </span>
+          ))}
+          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-tertiary)" }}>
+            {filtered.length} facts
+            {activeSrc && <> · <strong>{activeSrc}</strong></>}
           </span>
         </div>
 
-        {/* Filter bar */}
-        <div style={{
-          display: "flex", gap: "16px", alignItems: "center",
-          flexWrap: "wrap", marginBottom: "16px",
-          padding: "10px 16px",
-          background: "var(--bg-surface)",
-          border: "1px solid var(--border)",
-          borderRadius: "4px",
-        }}>
-          {/* Search */}
-          <input
-            type="text"
-            placeholder="Search citations…"
-            value={q}
-            onChange={(e) => handleSearch(e.target.value)}
-            style={{
-              background: "var(--bg-page)", border: "1px solid var(--border)",
-              color: "var(--text-primary)", fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: "12px", padding: "5px 10px",
-              width: "220px", outline: "none", borderRadius: "3px",
-            }}
-          />
-
-          {/* Confidence filter */}
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span className="ws-upper">Min conf.</span>
-            {[1, 2, 3, 4, 5].map((c) => (
-              <button
-                key={c}
-                onClick={() => handleConfidence(c)}
-                style={{
-                  background: minConfidence === c ? "var(--brand-navy)" : "#fff",
-                  border: `1px solid ${minConfidence === c ? "var(--brand-navy)" : "var(--border)"}`,
-                  color: minConfidence === c ? "#fff" : "var(--text-secondary)",
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: "11px", width: "26px", height: "26px",
-                  cursor: "pointer", borderRadius: "3px",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}
-              >
-                {c}
-              </button>
-            ))}
-          </div>
-
-          {/* Table type filter */}
-          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-            <button
-              className={`chip${activeTable === null ? " active" : ""}`}
-              onClick={() => handleTableFilter(null)}
-            >
-              All
-            </button>
-            {ALL_TABLES.map((tbl) => (
-              <button
-                key={tbl}
-                className={`chip${activeTable === tbl ? " active" : ""}`}
-                onClick={() => handleTableFilter(tbl)}
-              >
-                {TABLE_LABELS[tbl]}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="ws-card" style={{ padding: 0, overflow: "hidden" }}>
-          <table className="ws-table">
-            <thead>
-              <tr>
-                <th style={{ width: "110px" }}>Date</th>
-                <th style={{ width: "120px" }}>Type</th>
-                <th style={{ width: "80px" }}>Conf.</th>
-                <th>Summary &amp; Citation</th>
-                <th style={{ width: "80px" }}>Article</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.length === 0 && (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: "center", color: "var(--text-tertiary)", padding: "32px 16px" }}>
-                    No facts match the current filters.
-                  </td>
-                </tr>
-              )}
-              {items.map((item) => (
-                <tr key={`${item.table}-${item.id}`}>
-                  <td className="mono" style={{ color: "var(--text-secondary)", fontSize: "12px" }}>
-                    {formatDate(item.created_at)}
-                  </td>
-                  <td>
-                    <span className={`type-pill ${TABLE_PILL_CLASS[item.table] ?? ""}`}>
-                      {TABLE_LABELS[item.table] ?? item.table}
-                    </span>
-                  </td>
-                  <td>
-                    <ConfDots confidence={item.confidence} />
-                  </td>
-                  <td>
-                    {item.summary && (
-                      <div style={{ fontSize: "13px", color: "var(--text-primary)", lineHeight: "1.4", marginBottom: item.source_citation ? "4px" : 0 }}>
-                        {item.summary}
-                      </div>
-                    )}
-                    {item.source_citation && (
-                      <div style={{ fontSize: "11px", color: "var(--text-secondary)", fontStyle: "italic" }}>
-                        "{item.source_citation}"
-                      </div>
-                    )}
-                  </td>
-                  <td className="mono" style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>
-                    {item.article_id ? `#${item.article_id}` : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="ws-table-pagination">
-              <span>
-                {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total.toLocaleString()}
-              </span>
-              <div className="arrows">
-                <button
-                  className={`arr${offset === 0 ? " disabled" : ""}`}
-                  onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-                  disabled={offset === 0}
-                >
-                  ‹
-                </button>
-                <span style={{ padding: "0 8px", lineHeight: "24px", fontSize: "12px" }}>
-                  {currentPage} / {totalPages}
-                </span>
-                <button
-                  className={`arr${offset + PAGE_SIZE >= total ? " disabled" : ""}`}
-                  onClick={() => setOffset(offset + PAGE_SIZE)}
-                  disabled={offset + PAGE_SIZE >= total}
-                >
-                  ›
-                </button>
+        {/* Facts */}
+        <div style={{ padding: "0 24px" }}>
+          {filtered.map((f, i) => (
+            <div key={i} style={{ padding: "16px 0", borderBottom: "1px solid var(--divider)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)", minWidth: 60 }}>{f.ts}</span>
+                <span className={"type-pill " + f.t}>{f.t}</span>
+                <span style={{ fontSize: 11, color: "var(--text-secondary)", flex: 1 }}>{f.src}</span>
+                <ConfDots n={f.conf} />
               </div>
+              <div style={{ fontSize: 13.5, color: "var(--text-primary)", lineHeight: 1.5 }}>{f.txt}</div>
+              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                {f.tags.map((tag, ti) => (
+                  <span key={ti} style={{ fontSize: 10, padding: "2px 6px", background: "var(--bg-wash)", color: "var(--text-secondary)" }}>{tag}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+          {filtered.length === 0 && (
+            <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-tertiary)", fontSize: 13 }}>
+              No facts match the selected filters.
             </div>
           )}
         </div>

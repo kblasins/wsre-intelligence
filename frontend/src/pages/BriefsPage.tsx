@@ -1,521 +1,186 @@
-/**
- * Briefs archive — lists all generated weekly briefs.
- * Each row can be expanded to read the full brief text.
- * Compare mode lets you select two briefs and view them side by side.
- */
-import { useState } from "react";
-import { useBrief, useBriefsList } from "../hooks/useMarketData";
-import { formatDate } from "../lib/format";
-import type { WeeklyBrief } from "../types/api";
+// Briefs — Warsaw weekly intelligence brief
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{
-      fontSize: "8px", fontWeight: 700, letterSpacing: "0.16em",
-      textTransform: "uppercase", color: "var(--brand-navy)", marginBottom: "8px",
-    }}>
-      {children}
-    </div>
-  );
-}
-
-export function BriefsPage() {
-  const { data: briefs, isLoading } = useBriefsList();
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [compareMode, setCompareMode] = useState(false);
-  const [compareIds, setCompareIds] = useState<number[]>([]);
-
-  return (
-    <div style={{ flex: 1, overflowY: "auto", background: "var(--bg-page)" }}>
-      <main style={{ maxWidth: "1000px", margin: "0 auto", padding: "32px 32px 80px" }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: "16px", marginBottom: "8px" }}>
-          <h1 className="ws-page-title">Intelligence Briefs</h1>
-          <button
-            onClick={() => {
-              setCompareMode(v => !v);
-              setCompareIds([]);
-              setSelectedId(null);
-            }}
-            className={`btn${compareMode ? " primary" : ""}`}
-            style={{ fontSize: "12px" }}
-          >
-            Compare
-          </button>
-        </div>
-        <p style={{
-          fontSize: "13px",
-          color: "var(--text-secondary)",
-          margin: "0 0 24px",
-          display: "flex",
-          alignItems: "center",
-          gap: "12px",
-        }}>
-          Weekly synthesis — Riyadh industrial real estate
-          {compareMode && (
-            <span style={{ color: "var(--brand-navy)" }}>
-              {compareIds.length === 0
-                ? "Select two briefs to compare"
-                : compareIds.length === 1
-                  ? "Select one more brief"
-                  : "Comparing two briefs — scroll down"}
-            </span>
-          )}
-        </p>
-
-        {isLoading && <div className="load-bar"><div className="load-bar-inner" /></div>}
-
-        {!isLoading && (!briefs || briefs.length === 0) && (
-          <div className="empty-state">
-            <p style={{ fontStyle: "italic", marginBottom: "8px" }}>No briefs yet.</p>
-            <code style={{ fontSize: "12px", color: "var(--brand-navy)", fontFamily: "'IBM Plex Mono', monospace" }}>
-              python -m app.briefing.orchestrator
-            </code>
-          </div>
-        )}
-
-        {briefs && briefs.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-            {briefs.map(brief => (
-              <BriefRow
-                key={brief.id}
-                id={brief.id}
-                weekEnding={brief.week_ending}
-                summary={brief.executive_summary}
-                generatedAt={brief.generated_at}
-                costUsd={brief.cost_usd}
-                modelId={brief.model_id}
-                hasPdf={brief.has_pdf}
-                compareMode={compareMode}
-                isCompareSelected={compareIds.includes(brief.id)}
-                isSelected={!compareMode && selectedId === brief.id}
-                onSelect={() => {
-                  if (compareMode) {
-                    setCompareIds(prev => {
-                      if (prev.includes(brief.id)) return prev.filter(id => id !== brief.id);
-                      if (prev.length >= 2) return [prev[1]!, brief.id];
-                      return [...prev, brief.id];
-                    });
-                  } else {
-                    setSelectedId(selectedId === brief.id ? null : brief.id);
-                  }
-                }}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* ── Comparison view ──────────────────────────────────────────── */}
-        {compareMode && compareIds.length === 2 && (
-          <BriefComparison idA={compareIds[0]!} idB={compareIds[1]!} briefs={briefs ?? []} />
-        )}
-      </main>
-    </div>
-  );
-}
-
-
-function BriefRow({
-  id, weekEnding, summary, generatedAt, costUsd, modelId, hasPdf,
-  compareMode, isCompareSelected, isSelected, onSelect,
-}: {
-  id: number;
-  weekEnding: string;
-  summary: string;
-  generatedAt: string;
-  costUsd: number;
-  modelId: string;
-  hasPdf: boolean;
-  compareMode: boolean;
-  isCompareSelected: boolean;
-  isSelected: boolean;
-  onSelect: () => void;
-}) {
-  const { data: full } = useBrief(isSelected ? id : null);
-
-  const weekLabel = new Date(weekEnding).toLocaleDateString("en-GB", {
-    day: "numeric", month: "long", year: "numeric",
-  });
-
-  const borderColor = isSelected || isCompareSelected
-    ? "var(--brand-navy)"
-    : "var(--border)";
-
-  return (
-    <div style={{
-      background: isCompareSelected ? "rgba(201,146,42,0.05)" : "var(--bg-surface)",
-      borderLeft: `2px solid ${borderColor}`,
-      transition: "border-color 120ms ease",
-    }}>
-      {/* Row header — always visible */}
-      <div
-        onClick={onSelect}
-        style={{
-          display: "flex",
-          alignItems: "flex-start",
-          gap: "20px",
-          padding: "16px 20px",
-          cursor: "pointer",
-        }}
-        onMouseEnter={e => {
-          (e.currentTarget as HTMLDivElement).style.background = "var(--bg-hover)";
-        }}
-        onMouseLeave={e => {
-          (e.currentTarget as HTMLDivElement).style.background = "transparent";
-        }}
-      >
-        {/* Date column */}
-        <div style={{ flexShrink: 0, width: "140px" }}>
-          <div style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: "12px",
-            color: "var(--text-primary)",
-            fontWeight: 600,
-          }}>
-            {weekLabel}
-          </div>
-          <div style={{ fontSize: "10px", color: "var(--text-tertiary)", marginTop: "2px" }}>
-            {formatDate(generatedAt)}
-          </div>
-        </div>
-
-        {/* Summary */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{
-            fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
-            fontStyle: "italic",
-            fontSize: "14px",
-            color: "var(--text-secondary)",
-            lineHeight: 1.5,
-            margin: 0,
-            display: "-webkit-box",
-            WebkitLineClamp: isSelected ? "unset" : 2,
-            WebkitBoxOrient: "vertical",
-            overflow: isSelected ? "visible" : "hidden",
-          }}>
-            {summary || "(no summary)"}
-          </p>
-        </div>
-
-        {/* Meta */}
-        <div style={{ flexShrink: 0, textAlign: "right" }}>
-          <div style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: "10px",
-            color: "var(--text-tertiary)",
-          }}>
-            ${costUsd.toFixed(4)}
-          </div>
-          <div style={{ fontSize: "9px", color: "var(--text-tertiary)", marginTop: "2px" }}>
-            {modelId.replace("claude-", "")}
-          </div>
-          {hasPdf && (
-            <a
-              href={`/api/briefs/${id}/pdf`}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={e => e.stopPropagation()}
-              style={{
-                display: "block",
-                marginTop: "4px",
-                fontSize: "9px",
-                fontWeight: 700,
-                letterSpacing: "0.1em",
-                color: "var(--brand-navy)",
-                textTransform: "uppercase",
-                textDecoration: "none",
-              }}
-            >
-              ↓ PDF
-            </a>
-          )}
-        </div>
-
-        {/* Expand chevron / compare indicator */}
-        <div style={{
-          flexShrink: 0,
-          width: "16px",
-          color: isCompareSelected ? "var(--brand-navy)" : "var(--text-tertiary)",
-          fontSize: "12px",
-          paddingTop: "2px",
-          fontWeight: isCompareSelected ? 700 : 400,
-        }}>
-          {compareMode
-            ? (isCompareSelected ? "✓" : "○")
-            : (isSelected ? "▲" : "▼")}
-        </div>
-      </div>
-
-      {/* Expanded full brief */}
-      {isSelected && full && (
-        <div style={{
-          borderTop: "1px solid var(--border)",
-          padding: "24px 20px 28px",
-        }}>
-          <BriefSections brief={full} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Only string fields are comparable side-by-side
-const COMPARE_SECTIONS: Array<{ key: string; label: string }> = [
-  { key: "executive_summary",       label: "Executive Summary" },
-  { key: "reit_commentary",         label: "Industrial REITs" },
-  { key: "transaction_commentary",  label: "Transactions" },
-  { key: "warehouse_commentary",    label: "Warehouse Market" },
+const briefSections = [
+  {
+    h: "Capital markets",
+    items: [
+      { t: "Allianz acquires Generation Park Y for €119m at 5.85% yield.", s: "Skanska Property Poland exit completes the Generation Park assemblage with the highest €/sqm comp on Wola at €4,920. The 24,200 sqm Q-rated tower was 94% leased on close.", src: "JLL Capital Markets · Eurobuild CEE", level: 1 },
+      { t: "PFA-Norway commits €286m to Forest Tower at 5.50% — tightest Warsaw print since 2022.", s: "Single-asset transaction marks the first Norwegian sovereign deployment into Warsaw office since the 2023 pause. Spread to 10Y POLGB compressed to 32 bps.", src: "Property Forum · WSRE intercept", level: 1 },
+      { t: "Cap rates: prime Centrum offer 5.65%, prime Wola 5.85%, prime Mokotów 7.20%.", s: "Centrum-vs-Mokotów spread now 155 bps, narrowest since Q4 2024 — pricing convergence on tenanted towers.", src: "Knight Frank · transacted comps", level: 2 },
+    ],
+  },
+  {
+    h: "Office leasing",
+    items: [
+      { t: "Net absorption Q1 2026: 58,400 sqm, +22% YoY — strongest start since pre-pandemic 2019.", s: "Wola captured 64% of net take-up; Mokotów posted negative absorption for the third consecutive quarter as 2014-vintage stock continues to repurpose.", src: "Walter Herz · Q1 Office Market View", level: 1 },
+      { t: "Allegro pre-lets 15,400 sqm at Forest Tower, expanding Wola HQ campus.", s: "Brings Allegro's Warsaw footprint to 47,800 sqm. Lease commences Q1 2027 with 7-year term and CPI-linked steps.", src: "Eurobuild CEE", level: 2 },
+      { t: "Citi BPO renews 24,200 sqm at V.Offices and adds 3,000 sqm.", s: "First major Mokotów retention this year — leasing team flagged as turning point for the submarket. Headline rent €17.20/sqm/mo, ~38 month free.", src: "Property Forum", level: 2 },
+    ],
+  },
+  {
+    h: "Primary residential",
+    items: [
+      { t: "Echo Investment posts +1.1% MoM median, leading top-12 developers.", s: "Browary Warszawskie etap VI repriced to PLN 24,800/m² (+1.64%) on 13 Apr — the highest non-Centrum primary print currently on the Jawność feed.", src: "Jawność cen mieszkań", level: 1 },
+      { t: "Warsaw average primary price: PLN 16,420/m², +0.6% MoM, +9.2% YoY.", s: "79% of all 30-day price moves were increases; volume-weighted change +1.4% offsets the 142/38 increase/cut count.", src: "WSRE composite index · MRiT feed", level: 2 },
+      { t: "Białołęka pipeline now 2,720 units across 2026–2028 — 28% of Warsaw total.", s: "Atal and Robyg dominate (combined 1,840 units in pipeline). Median PLN 13,400/m² remains the lowest dzielnica price.", src: "WSRE pipeline tracker", level: 2 },
+    ],
+  },
+  {
+    h: "Regulatory & political",
+    items: [
+      { t: "REIT-equivalent (FINN) bill enters second reading in the Sejm.", s: "If passed in the current draft, FINN vehicles will require ≥80% real-estate assets and a 90% distribution mandate. Implementation expected H1 2027.", src: "Sejm RP druk 412 · WSRE legal", level: 1 },
+      { t: "NBP holds reference rate at 5.25% for the fourth consecutive month.", s: "Forward curve prices first cut for Sep 2026; office cap rates unlikely to compress materially before that move.", src: "NBP / Bankier", level: 2 },
+      { t: "WSA Warsaw upholds 'Czyste-Towarowa' MPZP — 130m height ceiling stands.", s: "Settles four years of appeals from neighbouring stakeholders; unblocks four stalled Wola schemes including Towarowa 22 Phase 2.", src: "Eurobuild CEE", level: 2 },
+    ],
+  },
 ];
 
-function BriefComparison({
-  idA, idB, briefs,
-}: {
-  idA: number;
-  idB: number;
-  briefs: Array<{ id: number; week_ending: string }>;
-}) {
-  const { data: briefA } = useBrief(idA);
-  const { data: briefB } = useBrief(idB);
-
-  const metaA = briefs.find(b => b.id === idA);
-  const metaB = briefs.find(b => b.id === idB);
-
-  function weekLabel(iso: string) {
-    return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-  }
-
+export function BriefsPage() {
   return (
-    <div style={{ marginTop: "32px", animation: "fadeUp 0.3s ease both" }}>
-      <div style={{
-        fontSize: "9px", fontWeight: 700, letterSpacing: "0.18em",
-        textTransform: "uppercase", color: "var(--text-tertiary)",
-        marginBottom: "16px",
-        paddingBottom: "8px",
-        borderBottom: "1px solid var(--border)",
-      }}>
-        Comparison
+    <div style={{ padding: "32px 48px 60px", maxWidth: 1100, margin: "0 auto", overflowY: "auto" }}>
+      {/* Branded brief header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingBottom: 18, borderBottom: "3px solid var(--brand-navy)", marginBottom: 32 }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{
+              width: 28, height: 28, background: "var(--brand-navy)", color: "#fff",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: "IBM Plex Mono", fontSize: 11, fontWeight: 600, letterSpacing: "0.5px",
+            }}>WS</div>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text-heading)", letterSpacing: "-0.01em" }}>WSRE Intelligence · Warsaw</div>
+              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>Real estate market intelligence — Poland</div>
+            </div>
+          </div>
+          <div style={{ marginTop: 24 }}>
+            <div className="ws-upper" style={{ fontSize: 11, color: "var(--text-secondary)" }}>Weekly Brief · Vol. 14 · Issue 16</div>
+            <h1 style={{ fontSize: 36, fontWeight: 600, color: "var(--text-heading)", margin: "6px 0 0", letterSpacing: "-0.015em", lineHeight: 1.15 }}>
+              Norwegian capital lands in Wola; Mokotów retention turns
+            </h1>
+          </div>
+        </div>
+        <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 32, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 14 }}>
+          <div>
+            <div className="tnum" style={{ fontSize: 13, color: "var(--text-secondary)" }}>Issue date</div>
+            <div className="mono" style={{ fontSize: 14, fontWeight: 500, marginTop: 2 }}>14 Apr 2026</div>
+          </div>
+          <div className="briefs-actions" style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 280 }}>
+            <button className="brief-btn brief-btn-primary" onClick={() => window.print()}>
+              ↓ Export PDF
+            </button>
+            <button className="brief-btn">✉ Email to client</button>
+            <button className="brief-btn">⎘ Copy as Markdown</button>
+            <button className="brief-btn brief-btn-disabled" disabled title="Slide export ships in v2">
+              PowerPoint <span style={{ fontSize: 9, marginLeft: 4 }}>(soon)</span>
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* Column headers */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "8px" }}>
-        {[{ meta: metaA, label: "A" }, { meta: metaB, label: "B" }].map(({ meta, label }) => (
-          <div key={label} style={{
-            padding: "8px 12px",
-            background: "var(--bg-surface)",
-            borderLeft: "2px solid var(--brand-navy)",
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: "11px",
-            color: "var(--brand-navy)",
-          }}>
-            {meta ? weekLabel(meta.week_ending) : "…"}
+      {/* Editor's note */}
+      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 32, marginBottom: 40 }}>
+        <div className="ws-upper">Editor's note</div>
+        <div style={{ fontSize: 14, lineHeight: 1.65, color: "var(--text-primary)" }}>
+          Two themes this week. First, Norwegian sovereign capital is back in Warsaw — PFA's €286m write at Forest Tower prices Wola office at the tightest yield since the 2022 cycle peak. Second, after eight quarters of Mokotów weakness, Citi's V.Offices renewal-plus-expansion suggests the submarket has found a floor. We are revising our Mokotów 12-month vacancy forecast from 17.2% to 14.8%, with the caveat that 2014–2016 stock will continue to weigh on the headline number through 2027.
+        </div>
+      </div>
+
+      {/* Headline numbers strip */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", borderTop: "1px solid var(--divider)", borderBottom: "1px solid var(--divider)", marginBottom: 40 }}>
+        {[
+          { l: "Prime Office Yield",  v: "5.65%",    d: "−15 bps QoQ" },
+          { l: "Q1 Net Absorption",   v: "58.4k sqm",d: "+22% YoY" },
+          { l: "Avg Primary PLN/m²",  v: "16,420",   d: "+0.6% MoM" },
+          { l: "YTD Investment Vol.", v: "€1.04bn",  d: "+18% YoY" },
+        ].map((m, i, a) => (
+          <div key={i} style={{ padding: "18px 20px", borderRight: i < a.length - 1 ? "1px solid var(--divider)" : "none" }}>
+            <div className="ws-upper" style={{ fontSize: 10 }}>{m.l}</div>
+            <div className="tnum" style={{ fontSize: 24, fontWeight: 500, marginTop: 6 }}>{m.v}</div>
+            <div className="tnum" style={{ fontSize: 11, color: "var(--up)", marginTop: 4 }}>▲ {m.d}</div>
           </div>
         ))}
       </div>
 
-      {(!briefA || !briefB) && (
-        <div style={{
-          padding: "24px",
-          textAlign: "center",
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: "11px",
-          color: "var(--text-tertiary)",
-        }}>
-          Loading briefs…
-        </div>
-      )}
-
-      {briefA && briefB && COMPARE_SECTIONS.map(({ key, label }) => {
-        type BriefKey = keyof typeof briefA.brief_json;
-        const textA = briefA.brief_json[key as BriefKey];
-        const textB = briefB.brief_json[key as BriefKey];
-        // Only render string fields in comparison
-        const strA = typeof textA === "string" ? textA : null;
-        const strB = typeof textB === "string" ? textB : null;
-        if (!strA && !strB) return null;
-        return (
-          <div key={key} style={{ marginBottom: "12px" }}>
-            <div style={{
-              fontSize: "8px", fontWeight: 700, letterSpacing: "0.14em",
-              textTransform: "uppercase", color: "var(--text-tertiary)",
-              marginBottom: "4px", padding: "0 2px",
-            }}>
-              {label}
+      {/* Brief sections */}
+      {briefSections.map((sec, i) => (
+        <div key={i} style={{ marginBottom: 48 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 32 }}>
+            <div>
+              <div className="ws-upper" style={{ fontSize: 11 }}>{sec.h}</div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-              {[strA, strB].map((text, i) => (
-                <div key={i} style={{
-                  padding: "14px 16px",
-                  background: "var(--bg-surface)",
-                  border: "1px solid var(--border)",
-                  fontSize: "12px",
-                  color: text ? "var(--text-secondary)" : "var(--text-tertiary)",
-                  lineHeight: 1.65,
-                  whiteSpace: "pre-wrap",
-                  ...(key === "executive_summary" ? {
-                    fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
-                    fontStyle: "italic",
-                    fontSize: "14px",
-                    color: "var(--text-primary)",
-                  } : {}),
-                }}>
-                  {text ?? "(no data)"}
+            <div>
+              {sec.items.map((b, bi) => (
+                <div key={bi} style={{ paddingBottom: 24, marginBottom: 24, borderBottom: bi < sec.items.length - 1 ? "1px solid var(--divider)" : "none" }}>
+                  <h3 style={{
+                    fontSize: b.level === 1 ? 18 : 15,
+                    fontWeight: 600, color: "var(--text-primary)",
+                    margin: 0, lineHeight: 1.35, letterSpacing: "-0.005em",
+                  }}>{b.t}</h3>
+                  <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--text-primary)", margin: "10px 0 0" }}>{b.s}</p>
+                  <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 10, fontStyle: "italic" }}>— {b.src}</div>
                 </div>
               ))}
             </div>
           </div>
-        );
-      })}
-    </div>
-  );
-}
+        </div>
+      ))}
 
-function BriefSections({ brief }: { brief: { brief_json: WeeklyBrief["brief_json"]; brief_text: string } }) {
-  const [showRaw, setShowRaw] = useState(false);
-  const j = brief.brief_json;
-
-  const textSections: Array<{ key: keyof typeof j; label: string }> = [
-    { key: "reit_commentary",        label: "Industrial REITs" },
-    { key: "transaction_commentary", label: "Transactions" },
-    { key: "warehouse_commentary",   label: "Warehouse Market" },
-  ];
-
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "16px" }}>
-        <button
-          onClick={() => setShowRaw(v => !v)}
-          style={{
-            background: "transparent",
-            border: "1px solid var(--border)",
-            color: "var(--text-tertiary)",
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: "9px",
-            letterSpacing: "0.1em",
-            padding: "3px 8px",
-            cursor: "pointer",
-            textTransform: "uppercase",
-          }}
-        >
-          {showRaw ? "Sections" : "Raw JSON"}
-        </button>
+      {/* Indicators table */}
+      <div style={{ marginBottom: 48 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 32 }}>
+          <div className="ws-upper" style={{ fontSize: 11 }}>Indicators</div>
+          <div>
+            <table className="ws-table" style={{ border: "1px solid var(--border)" }}>
+              <thead>
+                <tr>
+                  <th>Indicator</th><th className="num">Latest</th><th className="num">WoW</th>
+                  <th className="num">MoM</th><th className="num">YoY</th><th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ["NBP Reference Rate", "5.25%", "0 bps",    "0 bps",    "−25 bps", "NBP"],
+                  ["EUR/PLN",            "4.2840","+0.4%",    "+0.6%",    "−1.2%",   "NBP fixing"],
+                  ["Polish 10Y",         "5.18%", "−4 bps",   "−14 bps",  "−42 bps", "Bloomberg"],
+                  ["CPI YoY",            "4.6%",  "—",        "−0.2 pp",  "−1.4 pp", "GUS"],
+                  ["Unemployment",       "5.1%",  "—",        "−0.1 pp",  "−0.3 pp", "GUS"],
+                  ["PMI Manufacturing",  "51.4",  "+0.2",     "+0.6",     "+2.4",    "S&P Global"],
+                  ["PKB YoY (latest)",   "3.2%",  "—",        "—",        "+1.0 pp", "GUS"],
+                  ["Mortgage rate (5y)", "6.84%", "−6 bps",   "−18 bps",  "−84 bps", "NBP MIR"],
+                ].map((r, i) => (
+                  <tr key={i}>
+                    <td>{r[0]}</td>
+                    <td className="num">{r[1]}</td>
+                    <td className="num" style={{ color: "var(--text-secondary)" }}>{r[2]}</td>
+                    <td className="num" style={{ color: "var(--text-secondary)" }}>{r[3]}</td>
+                    <td className="num" style={{ color: "var(--text-secondary)" }}>{r[4]}</td>
+                    <td style={{ color: "var(--text-secondary)", fontSize: 12 }}>{r[5]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
-      {showRaw ? (
-        <pre style={{
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: "11px",
-          color: "var(--text-secondary)",
-          whiteSpace: "pre-wrap",
-          lineHeight: 1.7,
-          margin: 0,
-          background: "var(--bg-page)",
-          padding: "16px",
-          border: "1px solid var(--border)",
-          maxHeight: "600px",
-          overflowY: "auto",
-        }}>
-          {brief.brief_text}
-        </pre>
-      ) : (
-        <article className="brief-doc" style={{ maxWidth: "none" }}>
-          {/* Executive summary */}
-          {j.executive_summary && (
-            <p style={{ fontSize: "16px", lineHeight: 1.7, fontStyle: "italic", marginBottom: "28px" }}>
-              {j.executive_summary}
-            </p>
-          )}
+      {/* Sources & Method */}
+      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 32, paddingTop: 24, borderTop: "3px solid var(--brand-navy)" }}>
+        <div className="ws-upper" style={{ fontSize: 11 }}>Sources & Method</div>
+        <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+          <p style={{ margin: 0 }}>
+            Compiled from 47 underlying facts across 11 publishing sources. Capital-markets comps confirmed against ≥2 sources before publication.
+            Primary residential figures sourced direct from the Jawność cen mieszkań feed (Pol. transparency law, Dz.U. 2023 poz. 1114). Sources cited per-item.
+          </p>
+          <p style={{ margin: "12px 0 0" }}>
+            This brief is for the named recipient only. Not investment advice. Distribution outside the recipient organisation requires written consent. Confidential · WSRE Intelligence Sp. z o.o.
+          </p>
+        </div>
+      </div>
 
-          {/* Commentary sections */}
-          {textSections.map(({ key, label }) => {
-            const text = j[key];
-            if (typeof text !== "string" || !text) return null;
-            return (
-              <div key={key as string}>
-                <h2>{label}</h2>
-                <p>{text}</p>
-              </div>
-            );
-          })}
-
-          {/* News intelligence */}
-          {j.news_intelligence && j.news_intelligence.length > 0 && (
-            <div>
-              <h2>News & Intelligence</h2>
-              {j.news_intelligence.map((item, i) => (
-                <div key={i} style={{ marginBottom: "20px" }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "4px" }}>
-                    <span style={{
-                      fontFamily: "'IBM Plex Mono', monospace", fontSize: "11px", fontWeight: 600,
-                      color: item.score >= 8 ? "var(--up)" : item.score >= 5 ? "var(--warn)" : "var(--text-tertiary)",
-                      minWidth: "20px",
-                    }}>
-                      {item.score}
-                    </span>
-                    <strong style={{ fontSize: "14px", fontWeight: 500 }}>{item.headline}</strong>
-                  </div>
-                  <p style={{ marginLeft: "28px", marginBottom: "6px", color: "var(--text-secondary)" }}>
-                    {item.implication}
-                  </p>
-                  {item.citation && (
-                    <blockquote style={{ marginLeft: "28px" }}>
-                      {item.citation}
-                      <span className="attr">— {item.source}{item.date ? `, ${item.date}` : ""}</span>
-                    </blockquote>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Macro highlights */}
-          {j.macro_highlights && j.macro_highlights.length > 0 && (
-            <div>
-              <h2>Macro Environment</h2>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "1px", background: "var(--border)", marginBottom: "16px" }}>
-                {j.macro_highlights.map((item, i) => (
-                  <div key={i} style={{ background: "var(--bg-surface)", padding: "12px 16px" }}>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: "5px" }}>
-                      <span style={{
-                        fontFamily: "'IBM Plex Mono', monospace", fontSize: "18px", fontWeight: 500,
-                        fontVariantNumeric: "tabular-nums", color: "var(--text-primary)",
-                      }}>
-                        {item.value}
-                      </span>
-                      <span style={{ fontSize: "10px", color: item.direction === "up" ? "var(--up)" : item.direction === "down" ? "var(--down)" : "var(--text-tertiary)" }}>
-                        {item.direction === "up" ? "▲" : item.direction === "down" ? "▼" : "—"}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "3px" }}>{item.indicator}</div>
-                    <div style={{ fontSize: "10px", color: "var(--text-tertiary)" }}>{item.period}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Watch list */}
-          {j.watch_list && j.watch_list.length > 0 && (
-            <div>
-              <h2>Watch List</h2>
-              {j.watch_list.map((item, i) => (
-                <div key={i} style={{
-                  marginBottom: "16px", padding: "14px 18px",
-                  borderLeft: "2px solid var(--brand-navy)",
-                  background: "var(--bg-surface)",
-                }}>
-                  <div style={{ fontSize: "14px", fontWeight: 500, marginBottom: "6px" }}>{item.item}</div>
-                  <p style={{ margin: "0 0 4px", color: "var(--text-secondary)", fontSize: "13px" }}>
-                    <span style={{ color: "var(--text-tertiary)", fontWeight: 500 }}>Trigger: </span>
-                    {item.trigger}
-                  </p>
-                  <div style={{ fontSize: "11px", color: "var(--text-tertiary)", fontVariantNumeric: "tabular-nums" }}>
-                    {item.timeline}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </article>
-      )}
+      <div style={{ marginTop: 64, paddingTop: 20, borderTop: "1px solid var(--divider)", fontSize: 11, color: "var(--text-tertiary)", display: "flex", justifyContent: "space-between" }}>
+        <span>Strictly private & confidential · WSRE Intelligence · Prepared for internal circulation and select partners</span>
+        <span className="tnum mono">v0.4.2 · 14 Apr 2026</span>
+      </div>
     </div>
   );
 }
