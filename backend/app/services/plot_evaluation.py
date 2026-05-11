@@ -197,8 +197,8 @@ async def _section_c(district: str, session: AsyncSession) -> dict[str, Any]:
             FROM primary_pricing
             WHERE district = :dist
               AND LOWER(TRIM(status)) IN ('active', 'wolne', 'w', 'free', 'available', 'a')
-              AND m2_price > 1000
-              AND m2_price < 50000
+              AND m2_price > 5000
+              AND m2_price < 30000
         """),
         {"dist": district},
     )).mappings().one_or_none()
@@ -218,9 +218,9 @@ async def _section_c(district: str, session: AsyncSession) -> dict[str, Any]:
             FROM primary_pricing
             WHERE district = :dist
               AND jsonb_array_length(price_history) >= 2
-              AND (price_history -> -1 ->> 'm2_price')::numeric > 1000
-              AND (price_history -> -1 ->> 'm2_price')::numeric < 50000
-              AND (price_history -> -2 ->> 'm2_price')::numeric > 1000
+              AND (price_history -> -1 ->> 'm2_price')::numeric > 5000
+              AND (price_history -> -1 ->> 'm2_price')::numeric < 30000
+              AND (price_history -> -2 ->> 'm2_price')::numeric > 5000
               AND (price_history -> -1 ->> 'date')::date >= CURRENT_DATE - 30
               AND (price_history -> -1 ->> 'm2_price')::numeric
                 IS DISTINCT FROM (price_history -> -2 ->> 'm2_price')::numeric
@@ -274,8 +274,8 @@ async def _section_d(district: str, session: AsyncSession) -> dict[str, Any]:
             FROM primary_pricing
             WHERE district = :dist
               AND LOWER(TRIM(status)) IN ('active', 'wolne', 'w', 'free', 'available', 'a')
-              AND m2_price > 1000
-              AND m2_price < 50000
+              AND m2_price > 5000
+              AND m2_price < 30000
         """),
         {"dist": district},
     )).mappings().one_or_none()
@@ -432,8 +432,9 @@ async def _section_h(district: str, session: AsyncSession) -> dict[str, Any]:
               AND jsonb_array_length(pp.price_history) >= 2
               AND (pp.price_history -> -1 ->> 'm2_price')::numeric
                 IS DISTINCT FROM (pp.price_history -> -2 ->> 'm2_price')::numeric
-              AND (pp.price_history -> -1 ->> 'm2_price')::numeric > 1000
-              AND (pp.price_history -> -2 ->> 'm2_price')::numeric > 1000
+              AND (pp.price_history -> -1 ->> 'm2_price')::numeric > 5000
+              AND (pp.price_history -> -1 ->> 'm2_price')::numeric < 30000
+              AND (pp.price_history -> -2 ->> 'm2_price')::numeric > 5000
               AND (pp.price_history -> -1 ->> 'date')::date >= CURRENT_DATE - 30
             GROUP BY
                 COALESCE(df.firm_name, jd.developer_name), pp.investment_name,
@@ -504,10 +505,10 @@ def _compute_underwriting(
     financing_cost = debt * financing_rate * (build_duration_months / 12)
     total_cost = build_cost + soft_cost + financing_cost
 
-    # Target profit: GDV × (1 - 1/(1+IRR)^(duration/12))
-    irr_fraction = target_irr_pct / 100
-    exponent = build_duration_months / 12
-    target_profit = gdv * (1 - 1 / math.pow(1 + irr_fraction, exponent))
+    # Target profit: 22% profit-on-cost (Polish residential developer convention)
+    # IRR parameter retained in inputs for display; profit-on-cost is the operative heuristic
+    _PROFIT_ON_COST = 0.22
+    target_profit = total_cost * _PROFIT_ON_COST
 
     residual_total = gdv - total_cost - target_profit
     residual_per_m2 = residual_total / area_m2 if area_m2 else 0
@@ -519,7 +520,7 @@ def _compute_underwriting(
         d = (bc + sc) * (financing_ltv_pct / 100)
         fc = d * financing_rate * (build_duration_months / 12)
         tc = bc + sc + fc
-        tp = g * (1 - 1 / math.pow(1 + irr_fraction, exponent))
+        tp = tc * _PROFIT_ON_COST
         r = g - tc - tp
         return max(0, round(r / area_m2))
 
