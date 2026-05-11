@@ -3,6 +3,24 @@
 import { useLatestBrief } from "../hooks/useMarketData";
 import type { WarsawSection, WarsawKeyFact, WarsawDistrictPrice, BriefMacroItem } from "../types/api";
 
+async function downloadPdf(briefId: number, weekEnding: string) {
+  const token = localStorage.getItem("ws_token");
+  const res = await fetch(`/api/briefs/${briefId}/pdf`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    alert(`PDF not available (${res.status})`);
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `wsre-intelligence-warsaw-${weekEnding}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── KPI strip ─────────────────────────────────────────────────────────────────
 
 function KpiStrip({
@@ -280,21 +298,14 @@ export function BriefsPage() {
             <div className="mono" style={{ fontSize: 14, fontWeight: 500, marginTop: 2 }}>{weekLong}</div>
           </div>
           <div className="briefs-actions" style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end", maxWidth: 280 }}>
-            {brief.pdf_uri ? (
-              <a
-                href={`/api/briefs/${brief.id}/pdf`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="brief-btn brief-btn-primary"
-                style={{ textDecoration: "none" }}
-              >
-                ↓ Export PDF
-              </a>
-            ) : (
-              <button className="brief-btn brief-btn-primary" onClick={() => window.print()}>
-                ↓ Export PDF
-              </button>
-            )}
+            <button
+              className="brief-btn brief-btn-primary"
+              onClick={() => downloadPdf(brief.id, brief.week_ending)}
+              disabled={!brief.pdf_uri}
+              title={brief.pdf_uri ? "Download rendered PDF" : "PDF not yet rendered"}
+            >
+              ↓ Export PDF
+            </button>
             <button className="brief-btn brief-btn-disabled" disabled title="Email ships in v2">
               ✉ Email to client
             </button>

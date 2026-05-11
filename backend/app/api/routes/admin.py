@@ -780,12 +780,24 @@ async def get_schedule() -> list[dict]:
 
 
 _VALID_MACRO_KEYS = frozenset({
+    # Saudi macro keys
     "sama_repo_rate",
     "sar_usd",
     "brent",
     "saudi_10y_yield",
-    "cpi_yoy",
     "riyadh_population",
+    # Polish / Warsaw macro keys (WS4)
+    "nbp_reference_rate",
+    "eur_pln",
+    "pln_10y_yield",
+    "cpi_yoy",
+    "unemployment_rate",
+    "pmi_construction",
+    "avg_mortgage_rate",
+    "gdp_yoy",
+    "warsaw_prime_office_yield",
+    "warsaw_office_q1_net_absorption_sqm",
+    "warsaw_ytd_investment_volume_meur",
 })
 
 

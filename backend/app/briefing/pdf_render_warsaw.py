@@ -282,17 +282,45 @@ def _kpi_strip_html(brief_json: dict) -> str:
     avg_pln_str = f"PLN {int(avg_pln):,}" if avg_pln else "—"
 
     macro = brief_json.get("_macro_table") or []
-    def _mt(key: str) -> str:
+    def _mt_raw(key: str) -> Any:
         for row in macro:
             if (row.get("indicator_key") or row.get("key") or "").lower() == key.lower():
-                return _e(str(row.get("value", "—")))
-        return "—"
+                return row.get("value")
+        return None
 
-    prime_yield = _mt("warsaw_prime_office_yield") or _macro_val("prime office yield")
-    absorption = _mt("warsaw_office_q1_net_absorption_sqm") or _macro_val("net absorption")
-    ytd_inv = _mt("warsaw_ytd_investment_volume_meur") or _macro_val("investment volume")
-    if ytd_inv and ytd_inv != "—" and not ytd_inv.startswith("EUR") and not ytd_inv.startswith("M"):
-        ytd_inv = f"EUR {ytd_inv}M"
+    def _fmt_yield(v: Any) -> str:
+        if v is None:
+            return "—"
+        try:
+            return f"{float(v):.2f}%"
+        except (TypeError, ValueError):
+            return str(v)
+
+    def _fmt_sqm(v: Any) -> str:
+        if v is None:
+            return "—"
+        try:
+            return f"{int(float(v)):,}"
+        except (TypeError, ValueError):
+            return str(v)
+
+    def _fmt_meur(v: Any) -> str:
+        if v is None:
+            return "—"
+        try:
+            n = float(v)
+            # Already in M EUR
+            return f"EUR {int(n):,}M"
+        except (TypeError, ValueError):
+            return str(v)
+
+    prime_yield_raw = _mt_raw("warsaw_prime_office_yield")
+    absorption_raw = _mt_raw("warsaw_office_q1_net_absorption_sqm")
+    ytd_inv_raw = _mt_raw("warsaw_ytd_investment_volume_meur")
+
+    prime_yield = _fmt_yield(prime_yield_raw) if prime_yield_raw is not None else (_macro_val("prime office yield") or "—")
+    absorption = _fmt_sqm(absorption_raw) if absorption_raw is not None else (_macro_val("net absorption") or "—")
+    ytd_inv = _fmt_meur(ytd_inv_raw) if ytd_inv_raw is not None else (_macro_val("investment volume") or "—")
 
     cells = [
         ("Prime Office Yield", prime_yield, ""),
