@@ -924,6 +924,280 @@ async def list_districts(
 # ── Summary stats ──────────────────────────────────────────────────────────────
 
 
+# ── Primary market (Jawność cen mieszkań) ──────────────────────────────────────
+
+_ACTIVE_STATUSES = "('active', 'wolne', 'w', 'free', 'available', 'a')"
+# Warsaw residential PLN/m² sanity gate — excludes parsing failures from non-standard XLSX schemas
+_PRICE_GUARD = "AND m2_price > 1000"
+
+
+@router.get("/primary-market/summary")
+async def primary_market_summary(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    """KPI strip: Warsaw median PLN/m², active listings, feed lag, price move counts."""
+    from sqlalchemy import text
+
+    row = (
+        await session.execute(
+            text(f"""
+                SELECT
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY m2_price) AS median_m2,
+                    COUNT(*) AS active_units,
+                    MAX(updated_at) AS last_updated,
+                    EXTRACT(EPOCH FROM NOW() - MAX(updated_at))::int AS lag_seconds
+                FROM primary_pricing
+                WHERE LOWER(TRIM(status)) IN {_ACTIVE_STATUSES}
+                  AND m2_price IS NOT NULL
+                  {_PRICE_GUARD}
+            """)
+        )
+    ).mappings().one_or_none()
+
+    moves = (
+        await session.execute(
+            text("""
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE (price_history -> -1 ->> 'm2_price')::numeric
+                            > (price_history -> -2 ->> 'm2_price')::numeric
+                    ) AS up_count,
+                    COUNT(*) FILTER (
+                        WHERE (price_history -> -1 ->> 'm2_price')::numeric
+                            < (price_history -> -2 ->> 'm2_price')::numeric
+                    ) AS dn_count
+                FROM primary_pricing
+                WHERE jsonb_array_length(price_history) >= 2
+                  AND (price_history -> -1 ->> 'date')::date >= CURRENT_DATE - 7
+                  AND (price_history -> -1 ->> 'm2_price')::numeric
+                    IS DISTINCT FROM (price_history -> -2 ->> 'm2_price')::numeric
+            """)
+        )
+    ).mappings().one_or_none()
+
+    if row is None:
+        return {
+            "median_m2": None, "active_units": 0, "last_updated": None,
+            "feed_lag_seconds": None, "price_moves_7d": {"up": 0, "dn": 0},
+        }
+
+    return {
+        "median_m2": round(float(row["median_m2"]), 0) if row["median_m2"] else None,
+        "active_units": row["active_units"],
+        "last_updated": row["last_updated"].isoformat() if row["last_updated"] else None,
+        "feed_lag_seconds": row["lag_seconds"],
+        "price_moves_7d": {
+            "up": moves["up_count"] if moves else 0,
+            "dn": moves["dn_count"] if moves else 0,
+        },
+    }
+
+
+@router.get("/primary-market/leaderboard")
+async def primary_market_leaderboard(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[dict]:
+    """Per-firm: active investments, units, median PLN/m², primary districts."""
+    from sqlalchemy import text
+
+    rows = (
+        await session.execute(
+            text(f"""
+                WITH base AS (
+                    SELECT
+                        COALESCE(df.firm_name, jd.developer_name) AS firm_name,
+                        COALESCE(df.firm_initials,
+                            UPPER(LEFT(REGEXP_REPLACE(
+                                COALESCE(df.firm_name, jd.developer_name, 'XX'), '[^A-Za-z]', '', 'g'
+                            ), 2))
+                        ) AS initials,
+                        pp.developer_id,
+                        pp.m2_price,
+                        pp.district
+                    FROM primary_pricing pp
+                    JOIN jawnosc_developers jd ON jd.id = pp.developer_id
+                    JOIN developer_firms df ON df.id = COALESCE(pp.firm_id, jd.firm_id)
+                    WHERE LOWER(TRIM(pp.status)) IN {_ACTIVE_STATUSES}
+                      AND pp.m2_price IS NOT NULL
+                      {_PRICE_GUARD}
+                )
+                SELECT
+                    firm_name,
+                    initials,
+                    COUNT(DISTINCT developer_id) AS investments,
+                    COUNT(*) AS active_units,
+                    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY m2_price)) AS median_m2,
+                    ARRAY_AGG(DISTINCT district ORDER BY district)
+                        FILTER (WHERE district IS NOT NULL) AS districts
+                FROM base
+                GROUP BY firm_name, initials
+                ORDER BY active_units DESC
+                LIMIT 30
+            """)
+        )
+    ).mappings().all()
+
+    return [
+        {
+            "firm_name": r["firm_name"],
+            "initials": r["initials"] or "?",
+            "investments": r["investments"],
+            "active_units": r["active_units"],
+            "median_m2": int(r["median_m2"]) if r["median_m2"] else None,
+            "districts": (r["districts"] or [])[:3],
+        }
+        for r in rows
+    ]
+
+
+@router.get("/primary-market/heatmap")
+async def primary_market_heatmap(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[dict]:
+    """Median PLN/m² and unit count per Warsaw dzielnica."""
+    from sqlalchemy import text
+
+    rows = (
+        await session.execute(
+            text(f"""
+                SELECT
+                    district,
+                    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY m2_price)) AS median_m2,
+                    COUNT(*) AS unit_count
+                FROM primary_pricing
+                WHERE district IS NOT NULL
+                  AND LOWER(TRIM(status)) IN {_ACTIVE_STATUSES}
+                  AND m2_price IS NOT NULL
+                  {_PRICE_GUARD}
+                GROUP BY district
+                ORDER BY median_m2 DESC
+            """)
+        )
+    ).mappings().all()
+
+    return [
+        {
+            "district": r["district"],
+            "median_m2": int(r["median_m2"]) if r["median_m2"] else None,
+            "unit_count": r["unit_count"],
+        }
+        for r in rows
+    ]
+
+
+@router.get("/primary-market/price-changes")
+async def primary_market_price_changes(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    days: int = Query(7, ge=1, le=90, description="Look-back window in days"),
+) -> list[dict]:
+    """Recent price change events extracted from price_history JSONB."""
+    from sqlalchemy import text
+
+    rows = (
+        await session.execute(
+            text("""
+                SELECT
+                    COALESCE(df.firm_name, jd.developer_name) AS firm_name,
+                    COALESCE(df.firm_initials,
+                        UPPER(LEFT(REGEXP_REPLACE(
+                            COALESCE(df.firm_name, jd.developer_name, 'XX'), '[^A-Za-z]', '', 'g'
+                        ), 2))
+                    ) AS initials,
+                    COALESCE(pp.investment_name, jd.developer_name) AS investment_name,
+                    pp.district,
+                    (pp.price_history -> -1 ->> 'date')::date AS change_date,
+                    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
+                        ORDER BY (pp.price_history -> -2 ->> 'm2_price')::numeric
+                    )) AS prev_m2,
+                    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
+                        ORDER BY (pp.price_history -> -1 ->> 'm2_price')::numeric
+                    )) AS curr_m2,
+                    COUNT(*) AS unit_count
+                FROM primary_pricing pp
+                JOIN jawnosc_developers jd ON jd.id = pp.developer_id
+                LEFT JOIN developer_firms df ON df.id = COALESCE(pp.firm_id, jd.firm_id)
+                WHERE jsonb_array_length(pp.price_history) >= 2
+                  AND (pp.price_history -> -1 ->> 'm2_price')::numeric
+                    IS DISTINCT FROM (pp.price_history -> -2 ->> 'm2_price')::numeric
+                  AND (pp.price_history -> -1 ->> 'm2_price')::numeric > 1000
+                  AND (pp.price_history -> -2 ->> 'm2_price')::numeric > 1000
+                  AND (pp.price_history -> -1 ->> 'date')::date >= CURRENT_DATE - CAST(:days AS int)
+                GROUP BY
+                    COALESCE(df.firm_name, jd.developer_name),
+                    COALESCE(df.firm_initials,
+                        UPPER(LEFT(REGEXP_REPLACE(
+                            COALESCE(df.firm_name, jd.developer_name, 'XX'), '[^A-Za-z]', '', 'g'
+                        ), 2))
+                    ),
+                    COALESCE(pp.investment_name, jd.developer_name),
+                    pp.district,
+                    (pp.price_history -> -1 ->> 'date')::date
+                ORDER BY change_date DESC, unit_count DESC
+                LIMIT 50
+            """),
+            {"days": days},
+        )
+    ).mappings().all()
+
+    result = []
+    for r in rows:
+        prev = float(r["prev_m2"]) if r["prev_m2"] else None
+        curr = float(r["curr_m2"]) if r["curr_m2"] else None
+        dpct = round((curr - prev) / prev * 100, 2) if prev and curr and prev != 0 else 0.0
+        result.append({
+            "change_date": r["change_date"].isoformat() if r["change_date"] else None,
+            "firm_name": r["firm_name"],
+            "initials": r["initials"] or "?",
+            "investment_name": r["investment_name"],
+            "district": r["district"],
+            "prev_m2": int(prev) if prev else None,
+            "curr_m2": int(curr) if curr else None,
+            "dpct": dpct,
+            "unit_count": r["unit_count"],
+            "dir": "up" if dpct > 0 else "down",
+        })
+    return result
+
+
+@router.get("/primary-market/pipeline")
+async def primary_market_pipeline(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[dict]:
+    """Active (non-sold) unit counts per Warsaw dzielnica — supply pipeline proxy."""
+    from sqlalchemy import text
+
+    rows = (
+        await session.execute(
+            text("""
+                SELECT
+                    district,
+                    COUNT(*) FILTER (
+                        WHERE LOWER(TRIM(status)) IN ('active', 'wolne', 'w', 'free', 'available', 'a')
+                    ) AS available_units,
+                    COUNT(*) FILTER (
+                        WHERE LOWER(TRIM(status)) IN ('reserved', 'zarezerwowane', 'z', 'rezerwacja')
+                    ) AS reserved_units,
+                    COUNT(*) AS total_units
+                FROM primary_pricing
+                WHERE district IS NOT NULL
+                  AND LOWER(TRIM(status)) NOT IN ('sold', 'sprzedane', 's')
+                GROUP BY district
+                ORDER BY total_units DESC
+            """)
+        )
+    ).mappings().all()
+
+    return [
+        {
+            "district": r["district"],
+            "available_units": r["available_units"],
+            "reserved_units": r["reserved_units"],
+            "total_units": r["total_units"],
+        }
+        for r in rows
+    ]
+
+
 @router.get("/stats")
 async def get_stats(
     session: Annotated[AsyncSession, Depends(get_db_session)],

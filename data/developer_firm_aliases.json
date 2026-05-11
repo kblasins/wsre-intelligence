@@ -1,0 +1,136 @@
+{
+  "_comment": "Maps normalized developer name fragments → canonical firm_name. All keys lowercase, no diacritics. Add new aliases as encountered. Checked against dane.gov.pl registry 2026-05-09.",
+
+  "dom development": "Dom Development",
+  "domdevelopment": "Dom Development",
+  "dom-development": "Dom Development",
+  "ddsa": "Dom Development",
+  "ddw": "Dom Development",
+  "ddkw": "Dom Development",
+
+  "atal": "Atal",
+  "atal spolka": "Atal",
+  "atal sa": "Atal",
+
+  "robyg": "Robyg",
+  "robyg wega": "Robyg",
+  "bg real estate": "Robyg",
+
+  "echo investment": "Echo Investment",
+  "echo": "Echo Investment",
+  "browary warszawskie": "Echo Investment",
+
+  "develia": "Develia",
+  "develia warszawa": "Develia",
+  "develia vita": "Develia",
+  "develia sa": "Develia",
+
+  "marvipol": "Marvipol Development",
+  "marvipol development": "Marvipol Development",
+
+  "murapol": "Murapol",
+  "murapol real estate": "Murapol",
+  "murapol projekt": "Murapol",
+
+  "yareal": "Yareal Polska",
+  "yareal polska": "Yareal Polska",
+
+  "matexi": "Matexi Polska",
+  "matexi polska": "Matexi Polska",
+
+  "okam": "Okam Capital",
+  "okam capital": "Okam Capital",
+
+  "archicom": "Archicom",
+  "archicom projekt": "Archicom",
+  "archicom lofty": "Archicom",
+  "archicom nieruchomosci": "Archicom",
+
+  "lokum": "Lokum Deweloper",
+  "lokum deweloper": "Lokum Deweloper",
+  "olczyk": "Lokum Deweloper",
+
+  "victoria dom": "Victoria Dom",
+  "victoria asset management": "Victoria Dom",
+  "victoria 2019": "Victoria Dom",
+
+  "yit": "YIT Polska",
+  "yit polska": "YIT Polska",
+  "yit development": "YIT Polska",
+  "yit gdansk": "YIT Polska",
+  "yit sp": "YIT Polska",
+
+  "budimex nieruchomosci": "Budimex Nieruchomości",
+  "budimex d": "Budimex Nieruchomości",
+  "budimex": "Budimex Nieruchomości",
+
+  "bpi real estate": "BPI Real Estate",
+  "bpi": "BPI Real Estate",
+
+  "polnord": "Polnord",
+
+  "jw construction": "JW Construction",
+  "jw": "JW Construction",
+
+  "asbud": "Asbud",
+
+  "spravia": "Spravia",
+  "spravia norren": "Spravia",
+
+  "cordia polska": "Cordia Polska",
+  "cordia": "Cordia Polska",
+
+  "eiffage": "Eiffage Immobilier Polska",
+  "eiffage immobilier": "Eiffage Immobilier Polska",
+
+  "cavatina": "Cavatina Holding",
+  "cavatina holding": "Cavatina Holding",
+
+  "ronson development": "Ronson Development",
+  "ronson": "Ronson Development",
+
+  "inpro": "Inpro",
+
+  "ed invest": "ED Invest",
+  "edinvest": "ED Invest",
+
+  "profbud": "Profbud",
+
+  "modecom": "Modecom",
+
+  "trei real estate": "Trei Real Estate",
+  "trei": "Trei Real Estate",
+
+  "_initials_overrides": {
+    "Dom Development": "DD",
+    "Atal": "AT",
+    "Robyg": "RB",
+    "Echo Investment": "EI",
+    "Develia": "DV",
+    "Marvipol Development": "MP",
+    "Murapol": "MU",
+    "Yareal Polska": "YR",
+    "Matexi Polska": "MX",
+    "Okam Capital": "OK",
+    "Archicom": "AC",
+    "Lokum Deweloper": "LD",
+    "Victoria Dom": "VD",
+    "YIT Polska": "YT",
+    "Budimex Nieruchomości": "BU",
+    "BPI Real Estate": "BP",
+    "Polnord": "PN",
+    "JW Construction": "JW",
+    "Asbud": "AB",
+    "Spravia": "SP",
+    "Cordia Polska": "CP",
+    "Eiffage Immobilier Polska": "EF",
+    "Cavatina Holding": "CV",
+    "Ronson Development": "RD",
+    "Inpro": "IN",
+    "ED Invest": "ED",
+    "Profbud": "PR",
+    "Modecom": "MC",
+    "Trei Real Estate": "TR",
+    "Yareal Polska": "YR"
+  }
+}
