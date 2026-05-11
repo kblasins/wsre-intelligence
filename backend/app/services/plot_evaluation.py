@@ -123,6 +123,10 @@ async def _section_a(plot_id: str, session: AsyncSession) -> dict[str, Any]:
         "mpzp_enacted_date": row["mpzp_enacted_date"].isoformat() if row["mpzp_enacted_date"] else None,
         "mpzp_resolution_id": row["mpzp_resolution_id"],
         "function_code": row["function_code"],
+        "build_cost_override_pln_m2_pum": (
+            float(row["build_cost_override_pln_m2_pum"])
+            if row["build_cost_override_pln_m2_pum"] is not None else None
+        ),
         "parameters": {
             "max_far": float(row["max_far"]) if row["max_far"] is not None else None,
             "max_height_m": float(row["max_height_m"]) if row["max_height_m"] is not None else None,
@@ -478,12 +482,64 @@ async def _section_h(district: str, session: AsyncSession) -> dict[str, Any]:
 
 # ── Section I — pure computation ──────────────────────────────────────────────
 
+# Default residential build cost (MW / pure residential)
+_BUILD_COST_RESIDENTIAL = 5500.0
+
+# Build cost overrides by function_code prefix.
+# U(MW) = mixed-use services + residential high-rise — significantly higher structural cost.
+# U     = pure commercial/services — similar high-rise cost assumption.
+_BUILD_COST_BY_FUNCTION: list[tuple[str, float]] = [
+    ("U(MW)", 7500.0),   # mixed-use: services + residential
+    ("U",     7500.0),   # pure commercial / services
+]
+
+# Commercial/services exit price for the non-residential portion of U(MW) blends.
+# Represents Wola office + retail mid-range (PLN/m²).
+_COMMERCIAL_EXIT_PLN_M2 = 12_000.0
+
+
+def _resolve_build_cost(function_code: str | None, override: float | None) -> float:
+    """Return PLN/m² PUM build cost for a given zoning function code.
+
+    Priority: per-plot seed override > function_code prefix lookup > residential default.
+    """
+    if override is not None:
+        return float(override)
+    fc = (function_code or "").strip()
+    for prefix, cost in _BUILD_COST_BY_FUNCTION:
+        if fc.startswith(prefix):
+            return cost
+    return _BUILD_COST_RESIDENTIAL
+
+
+def _resolve_exit_price(function_code: str | None, residential_central: float) -> tuple[float, str]:
+    """Return (blended_exit_price, methodology_note) for a given function code.
+
+    Blending rules:
+      - MW (or unrecognised residential): 100% residential comps.
+      - U(MW): 60% residential median + 40% commercial flat rate (PLN 12,000/m²).
+      - U (pure commercial/services): 100% commercial flat rate.
+    """
+    fc = (function_code or "").strip()
+    if fc.startswith("U(MW)"):
+        blended = 0.60 * residential_central + 0.40 * _COMMERCIAL_EXIT_PLN_M2
+        note = (
+            f"Blended U(MW): 60% residential ({residential_central:,.0f}) "
+            f"+ 40% commercial ({_COMMERCIAL_EXIT_PLN_M2:,.0f} PLN/m²)"
+        )
+        return blended, note
+    if fc.startswith("U"):
+        note = f"Pure commercial/services: flat {_COMMERCIAL_EXIT_PLN_M2:,.0f} PLN/m²"
+        return _COMMERCIAL_EXIT_PLN_M2, note
+    # Default: residential comps only
+    return residential_central, "Residential comps (Section C primary median)"
+
+
 def _compute_underwriting(
     area_m2: int,
     sec_a: dict[str, Any],
     sec_c: dict[str, Any],
     *,
-    build_cost_pln_m2_pum: float = 5500.0,
     target_irr_pct: float = 18.0,
     financing_ltv_pct: float = 65.0,
     financing_rate_premium_bps: float = 250.0,
@@ -491,7 +547,14 @@ def _compute_underwriting(
     build_duration_months: float = 24.0,
 ) -> dict[str, Any]:
     max_far = sec_a.get("parameters", {}).get("max_far") or 0.0
-    central_exit = (sec_c.get("projected_exit_24m") or {}).get("central") or 0.0
+    residential_central = (sec_c.get("projected_exit_24m") or {}).get("central") or 0.0
+
+    function_code = sec_a.get("function_code")
+    build_cost_override = sec_a.get("build_cost_override_pln_m2_pum")
+
+    # Resolve function-aware build cost and blended exit price
+    build_cost_pln_m2_pum = _resolve_build_cost(function_code, build_cost_override)
+    central_exit, exit_methodology = _resolve_exit_price(function_code, residential_central)
 
     pum = area_m2 * max_far
 
@@ -535,7 +598,8 @@ def _compute_underwriting(
         },
         "derived": {
             "pum_m2": round(pum),
-            "central_exit_price_pln_m2": central_exit,
+            "central_exit_price_pln_m2": round(central_exit),
+            "exit_methodology": exit_methodology,
         },
         "outputs": {
             "estimated_gdv_pln": round(gdv),

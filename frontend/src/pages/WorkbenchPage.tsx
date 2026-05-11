@@ -1,7 +1,8 @@
 // Workbench V2 — three-pane: 260px saved-deals/layers | map | 480px PlotEvaluation
 
-import { useEffect, useRef, useState } from "react";
-import Map, { NavigationControl, type MapRef } from "react-map-gl/maplibre";
+import { useEffect, useRef, useState, useCallback } from "react";
+import Map, { NavigationControl, Popup, type MapRef } from "react-map-gl/maplibre";
+import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { api } from "../lib/api";
 
@@ -20,7 +21,7 @@ interface LayerCat { key: string; label: string; open: boolean; children: LayerC
 const INITIAL_LAYER_TREE: LayerCat[] = [
   { key: "plots",    label: "Plots & Zoning", open: true, children: [
     { label: "Plot boundaries",        on: true  },
-    { label: "MPZP coverage",          on: true  },
+    { label: "MPZP coverage",          on: false },
     { label: "MPZP function",          on: false },
     { label: "WZ decisions (24m)",     on: false },
     { label: "Conservation areas",     on: false },
@@ -56,6 +57,73 @@ const INITIAL_LAYER_TREE: LayerCat[] = [
     { label: "Tenant signals",    on: false },
   ]},
 ];
+
+// ── POI layer configuration ────────────────────────────────────────────────────
+
+// Maps infra layer label → OSM category fetched from /api/workbench/pois
+const INFRA_POI: Record<string, string> = {
+  "Metro + planned extensions": "metro_station",
+  "Tram": "tram_stop",
+  "Schools": "school",
+  "Hospitals": "healthcare",
+  "Parks": "park",
+};
+
+const POI_LAYER_STYLE: Record<string, { color: string; radius: number; opacity: number }> = {
+  metro_station: { color: "#002060", radius: 6, opacity: 0.9 },
+  tram_stop:     { color: "#002060", radius: 3, opacity: 0.7 },
+  school:        { color: "#14326D", radius: 5, opacity: 0.75 },
+  healthcare:    { color: "#8B1F1F", radius: 5, opacity: 0.75 },
+  park:          { color: "#1F6B3A", radius: 4, opacity: 0.6 },
+};
+
+// ── Warsaw WMS configuration ───────────────────────────────────────────────────
+
+const WARSAW_WMS = "https://wms.um.warszawa.pl/serwis";
+
+// Maps "plots" child label → WMS layer ID
+const PLOTS_WMS: Record<string, string> = {
+  "MPZP coverage":  "MPZP_ZAKRESY_OBOWIAZUJACE",
+  "MPZP function":  "MPZP_PRZEZNACZENIE_TERENU",
+};
+
+// MapLibre source/layer IDs
+const WMS_SOURCES: Record<string, { wmsLayer: string; minzoom: number; opacity: number }> = {
+  "mpzp-boundaries": { wmsLayer: "MPZP_ZAKRESY_OBOWIAZUJACE", minzoom: 12, opacity: 0.55 },
+  "mpzp-function":   { wmsLayer: "MPZP_PRZEZNACZENIE_TERENU", minzoom: 15, opacity: 0.40 },
+};
+
+// Convert tile z/x/y → EPSG:4326 bbox string "minLon,minLat,maxLon,maxLat"
+function tileBbox4326(x: number, y: number, z: number): string {
+  const n = Math.pow(2, z);
+  const minLon = (x / n) * 360 - 180;
+  const maxLon = ((x + 1) / n) * 360 - 180;
+  const minLat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 1)) / n))) * 180) / Math.PI;
+  const maxLat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180) / Math.PI;
+  return `${minLon},${minLat},${maxLon},${maxLat}`;
+}
+
+// Register warsaw-wms:// custom protocol once at module level
+let _wmsProtocolRegistered = false;
+function registerWmsProtocol() {
+  if (_wmsProtocolRegistered) return;
+  _wmsProtocolRegistered = true;
+  // MapLibre GL JS v4 addProtocol signature
+  maplibregl.addProtocol("warsaw-wms", async (params: { url: string }, abortController: AbortController) => {
+    // URL format: warsaw-wms://LAYER_NAME/z/x/y
+    const m = params.url.match(/^warsaw-wms:\/\/([^/]+)\/(\d+)\/(\d+)\/(\d+)$/);
+    if (!m) throw new Error("Bad warsaw-wms URL: " + params.url);
+    const layer = m[1], zs = m[2], xs = m[3], ys = m[4];
+    const bbox = tileBbox4326(parseInt(xs!), parseInt(ys!), parseInt(zs!));
+    const url = `${WARSAW_WMS}?service=WMS&version=1.1.1&request=GetMap` +
+      `&layers=${layer}&styles=&format=image/png&transparent=true` +
+      `&srs=EPSG:4326&bbox=${bbox}&width=256&height=256`;
+    const res = await fetch(url, { signal: abortController.signal });
+    if (!res.ok) throw new Error(`WMS ${res.status}`);
+    const data = await res.arrayBuffer();
+    return { data };
+  });
+}
 
 // ── API types ──────────────────────────────────────────────────────────────────
 
@@ -771,12 +839,43 @@ function PlotCompareView({ liveData }: { liveData: PlotEvalData | null }) {
 
 // ── Left rail ─────────────────────────────────────────────────────────────────
 
-function LeftRail({ activeDeal, onSelectDeal }: { activeDeal: string; onSelectDeal: (id: string) => void }) {
+function LeftRail({
+  activeDeal,
+  onSelectDeal,
+  onInfraToggle,
+  onPlotsToggle,
+  wmsStatus,
+}: {
+  activeDeal: string;
+  onSelectDeal: (id: string) => void;
+  onInfraToggle: (category: string, on: boolean) => void;
+  onPlotsToggle: (label: string, on: boolean) => void;
+  wmsStatus: Record<string, "idle" | "loading" | "loaded" | "error">;
+}) {
   const [tree, setTree] = useState<LayerCat[]>(INITIAL_LAYER_TREE);
   const [dateRange, setDateRange] = useState("24 m");
 
   function toggleCat(k: string) {
     setTree(t => t.map(c => c.key === k ? { ...c, open: !c.open } : c));
+  }
+
+  function toggleChild(catKey: string, childIdx: number) {
+    setTree(t => t.map(cat => {
+      if (cat.key !== catKey) return cat;
+      const children = cat.children.map((ch, i) => {
+        if (i !== childIdx) return ch;
+        const next = { ...ch, on: !ch.on };
+        const poiCat = INFRA_POI[ch.label];
+        if (catKey === "infra" && poiCat) {
+          onInfraToggle(poiCat, next.on);
+        }
+        if (catKey === "plots" && PLOTS_WMS[ch.label]) {
+          onPlotsToggle(ch.label, next.on);
+        }
+        return next;
+      });
+      return { ...cat, children };
+    }));
   }
 
   return (
@@ -816,12 +915,32 @@ function LeftRail({ activeDeal, onSelectDeal }: { activeDeal: string; onSelectDe
               <span style={{ flex: 1, fontWeight: 500, fontSize: 12, color: "var(--text-primary)" }}>{cat.label}</span>
               <span className="chev">{cat.open ? "▾" : "▸"}</span>
             </div>
-            {cat.open && cat.children.map((ch, i) => (
-              <div key={i} className="layer-row sub">
-                <span className={"cbox " + (ch.on ? "on" : "")} />
-                <span>{ch.label}</span>
-              </div>
-            ))}
+            {cat.open && cat.children.map((ch, i) => {
+              const wmsKey = cat.key === "plots" ? Object.entries(WMS_SOURCES).find(
+                ([, cfg]) => cfg.wmsLayer === PLOTS_WMS[ch.label]
+              )?.[0] : undefined;
+              const status = wmsKey ? wmsStatus[wmsKey] : undefined;
+              return (
+                <div
+                  key={i}
+                  className="layer-row sub"
+                  style={{ cursor: "pointer" }}
+                  onClick={() => toggleChild(cat.key, i)}
+                >
+                  <span className={"cbox " + (ch.on ? "on" : "")} />
+                  <span style={{ flex: 1 }}>{ch.label}</span>
+                  {ch.on && status === "loading" && (
+                    <span style={{ fontSize: 9, color: "var(--text-tertiary)", marginLeft: 4 }}>…</span>
+                  )}
+                  {ch.on && status === "error" && (
+                    <span
+                      title="MPZP tiles require Polish network access. Connect NordVPN if outside Poland."
+                      style={{ fontSize: 9, color: "#B45309", marginLeft: 4, cursor: "help" }}
+                    >⚠</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ))}
       </div>
@@ -863,6 +982,38 @@ function MapControls({ compareOn, onToggle }: { compareOn: boolean; onToggle: ()
 
 const WARSAW = { longitude: 21.017, latitude: 52.237, zoom: 13 };
 
+// ── MPZP GetFeatureInfo popup data ─────────────────────────────────────────────
+
+interface MpzpPopup {
+  lon: number;
+  lat: number;
+  funNazwa: string | null;
+  funSymb: string | null;
+  nazwaPlanu: string | null;
+  maxWys: string | null;
+  intenZab: string | null;
+  www: string | null;
+  empty: boolean;
+}
+
+function parseMpzpGfi(xml: string): MpzpPopup | null {
+  const get = (tag: string) => {
+    const m = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
+    const v = m ? m[1]!.trim() : null;
+    return v === "null" || v === "" ? null : v;
+  };
+  return {
+    lon: 0, lat: 0,
+    funNazwa: get("FUN_NAZWA"),
+    funSymb: get("FUN_SYMB"),
+    nazwaPlanu: get("NAZWA_PLAN"),
+    maxWys: get("MAX_WYS"),
+    intenZab: get("INTEN_ZAB"),
+    www: get("WWW"),
+    empty: !xml.includes("<ROW"),
+  };
+}
+
 export function WorkbenchPage() {
   const mapRef = useRef<MapRef>(null);
   const [compareOn, setCompareOn] = useState(false);
@@ -870,6 +1021,193 @@ export function WorkbenchPage() {
   const [plotData, setPlotData] = useState<PlotEvalData | null>(null);
   const [plotLoading, setPlotLoading] = useState(false);
   const [plotError, setPlotError] = useState<string | null>(null);
+
+  // POI layer state
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [poiEnabled, setPoiEnabled] = useState<Record<string, boolean>>({ metro_station: true });
+  const [poiData, setPoiData] = useState<Record<string, { type: string; features: unknown[] }>>({});
+
+  // WMS layer state
+  const [wmsEnabled, setWmsEnabled] = useState<Record<string, boolean>>({});
+  const [wmsStatus, setWmsStatus] = useState<Record<string, "idle" | "loading" | "loaded" | "error">>({
+    "mpzp-boundaries": "idle",
+    "mpzp-function": "idle",
+  });
+
+  // MPZP click popup
+  const [mpzpPopup, setMpzpPopup] = useState<MpzpPopup | null>(null);
+
+  // Register WMS protocol once
+  useEffect(() => { registerWmsProtocol(); }, []);
+
+  function handleInfraToggle(category: string, on: boolean) {
+    setPoiEnabled(prev => ({ ...prev, [category]: on }));
+  }
+
+  function handlePlotsToggle(label: string, on: boolean) {
+    const entry = Object.entries(WMS_SOURCES).find(
+      ([, cfg]) => cfg.wmsLayer === PLOTS_WMS[label]
+    );
+    if (!entry) return;
+    const [sourceId] = entry;
+    setWmsEnabled(prev => ({ ...prev, [sourceId]: on }));
+  }
+
+  // Fetch POI GeoJSON for newly-enabled categories
+  useEffect(() => {
+    const toFetch = Object.entries(poiEnabled)
+      .filter(([, on]) => on)
+      .map(([cat]) => cat)
+      .filter(cat => !poiData[cat]);
+    if (!toFetch.length) return;
+
+    const token = localStorage.getItem("ws_token");
+    fetch(`/api/workbench/pois?categories=${toFetch.join(",")}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => r.json())
+      .then((fc: { type: string; features: { properties: { category: string } }[] }) => {
+        const byCat: Record<string, { type: string; features: unknown[] }> = {};
+        for (const cat of toFetch) byCat[cat] = { type: "FeatureCollection", features: [] };
+        for (const f of fc.features) {
+          const cat = f.properties.category;
+          if (byCat[cat]) byCat[cat].features.push(f);
+        }
+        setPoiData(prev => ({ ...prev, ...byCat }));
+      })
+      .catch(err => console.error("POI fetch failed:", err));
+  }, [poiEnabled]);
+
+  // Sync POI MapLibre layers
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map || !mapLoaded) return;
+
+    for (const [cat, style] of Object.entries(POI_LAYER_STYLE)) {
+      const sourceId = `poi-${cat}`;
+      const layerId = `poi-layer-${cat}`;
+      const on = !!poiEnabled[cat];
+      const data = poiData[cat];
+
+      if (on && data) {
+        if (!map.getSource(sourceId)) {
+          map.addSource(sourceId, { type: "geojson", data } as Parameters<typeof map.addSource>[1]);
+          map.addLayer({
+            id: layerId,
+            type: "circle",
+            source: sourceId,
+            paint: {
+              "circle-color": style.color,
+              "circle-radius": style.radius,
+              "circle-opacity": style.opacity,
+            },
+          });
+        } else {
+          (map.getSource(sourceId) as unknown as { setData: (d: unknown) => void }).setData(data);
+          if (map.getLayer(layerId)) map.setLayoutProperty(layerId, "visibility", "visible");
+        }
+      } else if (!on && map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", "none");
+      }
+    }
+  }, [poiData, poiEnabled, mapLoaded]);
+
+  // Initialize WMS sources/layers on map load
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map || !mapLoaded) return;
+
+    for (const [sourceId, cfg] of Object.entries(WMS_SOURCES)) {
+      const layerId = `${sourceId}-layer`;
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, {
+          type: "raster",
+          tiles: [`warsaw-wms://${cfg.wmsLayer}/{z}/{x}/{y}`],
+          tileSize: 256,
+          minzoom: cfg.minzoom,
+          maxzoom: 20,
+          attribution: "© BGiK m.st. Warszawy",
+        } as Parameters<typeof map.addSource>[1]);
+
+        // Track tile loading status
+        map.on("sourcedataloading", (e) => {
+          if (e.sourceId === sourceId) {
+            setWmsStatus(prev => ({ ...prev, [sourceId]: "loading" }));
+          }
+        });
+        map.on("sourcedata", (e) => {
+          if (e.sourceId === sourceId && e.isSourceLoaded) {
+            setWmsStatus(prev => ({ ...prev, [sourceId]: "loaded" }));
+          }
+        });
+        map.on("error", () => {
+          setWmsStatus(prev => ({ ...prev, [sourceId]: "error" }));
+        });
+      }
+
+      if (!map.getLayer(layerId)) {
+        // Insert MPZP layers before POI layers so they render below circles
+        const firstPoiLayer = map.getLayer("poi-layer-metro_station")?.id;
+        map.addLayer({
+          id: layerId,
+          type: "raster",
+          source: sourceId,
+          layout: { visibility: "none" },
+          paint: { "raster-opacity": cfg.opacity },
+        }, firstPoiLayer);
+      }
+    }
+  }, [mapLoaded]);
+
+  // Show/hide WMS layers when enabled state changes
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map || !mapLoaded) return;
+
+    for (const [sourceId] of Object.entries(WMS_SOURCES)) {
+      const layerId = `${sourceId}-layer`;
+      if (!map.getLayer(layerId)) continue;
+      const visibility = wmsEnabled[sourceId] ? "visible" : "none";
+      map.setLayoutProperty(layerId, "visibility", visibility);
+      if (wmsEnabled[sourceId]) {
+        setWmsStatus(prev => ({ ...prev, [sourceId]: "loading" }));
+      }
+    }
+  }, [wmsEnabled, mapLoaded]);
+
+  // MPZP click handler — GetFeatureInfo
+  const handleMapClick = useCallback(async (e: { lngLat: { lng: number; lat: number } }) => {
+    const anyWmsOn = Object.entries(wmsEnabled).some(([, on]) => on);
+    if (!anyWmsOn) return;
+
+    const { lng, lat } = e.lngLat;
+    // Size the GFI bbox to roughly one 256-tile width at current zoom
+    // so the function layer scale hint is satisfied
+    const zoom = mapRef.current?.getMap()?.getZoom() ?? 14;
+    const d = (360 / Math.pow(2, zoom)) * 0.15; // ~15% of tile width in degrees
+    const bbox = `${lng - d},${lat - d},${lng + d},${lat + d}`;
+
+    // Query the function layer for zone details
+    // Use 256×256 image with click at center pixel
+    const gfiUrl = `${WARSAW_WMS}?service=WMS&version=1.1.1&request=GetFeatureInfo` +
+      `&layers=MPZP_PRZEZNACZENIE_TERENU&query_layers=MPZP_PRZEZNACZENIE_TERENU` +
+      `&styles=&format=image/png&info_format=text/html` +
+      `&srs=EPSG:4326&bbox=${bbox}&width=256&height=256&x=128&y=128`;
+
+    try {
+      const res = await fetch(gfiUrl);
+      const xml = await res.text();
+      const parsed = parseMpzpGfi(xml);
+      if (parsed) {
+        parsed.lon = lng;
+        parsed.lat = lat;
+        setMpzpPopup(parsed);
+      }
+    } catch {
+      setMpzpPopup({ lon: lng, lat, funNazwa: null, funSymb: null, nazwaPlanu: null,
+        maxWys: null, intenZab: null, www: null, empty: true });
+    }
+  }, [wmsEnabled]);
 
   // Fetch plot evaluation when active deal changes
   useEffect(() => {
@@ -893,6 +1231,14 @@ export function WorkbenchPage() {
         setPlotLoading(false);
       });
   }, [activeDeal]);
+
+  // Resolve plan detail URL from relative www field
+  function planUrl(www: string | null): string | null {
+    if (!www) return null;
+    if (www.startsWith("http")) return www;
+    // e.g. "../dane/plany/4.12.html" → absolute
+    return `https://mapa.um.warszawa.pl/dane/plany/${www.replace(/^.*plany\//, "")}`;
+  }
 
   function renderRightRail() {
     if (compareOn) return <PlotCompareView liveData={plotData} />;
@@ -919,7 +1265,13 @@ export function WorkbenchPage() {
 
   return (
     <div style={{ display: "flex", height: "calc(100vh - 100px)", background: "#fff", overflow: "hidden" }}>
-      <LeftRail activeDeal={activeDeal} onSelectDeal={setActiveDeal} />
+      <LeftRail
+        activeDeal={activeDeal}
+        onSelectDeal={setActiveDeal}
+        onInfraToggle={handleInfraToggle}
+        onPlotsToggle={handlePlotsToggle}
+        wmsStatus={wmsStatus}
+      />
 
       {/* Map */}
       <div style={{ flex: 1, position: "relative", overflow: "hidden", borderRight: "1px solid var(--border)" }}>
@@ -928,8 +1280,78 @@ export function WorkbenchPage() {
           initialViewState={WARSAW}
           style={{ width: "100%", height: "100%" }}
           mapStyle="https://tiles.openfreemap.org/styles/liberty"
+          onLoad={() => setMapLoaded(true)}
+          onClick={handleMapClick}
         >
           <NavigationControl position="top-left" showCompass={false} />
+
+          {/* MPZP GetFeatureInfo popup */}
+          {mpzpPopup && (
+            <Popup
+              longitude={mpzpPopup.lon}
+              latitude={mpzpPopup.lat}
+              closeOnClick={false}
+              onClose={() => setMpzpPopup(null)}
+              maxWidth="300px"
+            >
+              <div style={{ fontFamily: "IBM Plex Sans, sans-serif", fontSize: 12, lineHeight: 1.5, padding: "2px 4px" }}>
+                {mpzpPopup.empty ? (
+                  <div style={{ color: "var(--text-secondary)" }}>
+                    No enacted MPZP covers this point.<br />
+                    <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
+                      May be subject to WZ (warunki zabudowy).
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    {mpzpPopup.nazwaPlanu && (
+                      <div style={{ fontWeight: 600, color: "var(--brand-navy)", marginBottom: 6, fontSize: 12 }}>
+                        {mpzpPopup.nazwaPlanu}
+                      </div>
+                    )}
+                    <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                      {mpzpPopup.funSymb && (
+                        <div style={{ display: "flex", gap: 8, marginBottom: 3 }}>
+                          <span style={{ color: "var(--text-tertiary)", width: 80, flexShrink: 0 }}>Function</span>
+                          <span style={{ fontWeight: 500, fontFamily: "IBM Plex Mono" }}>{mpzpPopup.funSymb}</span>
+                        </div>
+                      )}
+                      {mpzpPopup.funNazwa && (
+                        <div style={{ display: "flex", gap: 8, marginBottom: 3 }}>
+                          <span style={{ color: "var(--text-tertiary)", width: 80, flexShrink: 0 }}></span>
+                          <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{mpzpPopup.funNazwa}</span>
+                        </div>
+                      )}
+                      {mpzpPopup.maxWys && (
+                        <div style={{ display: "flex", gap: 8, marginBottom: 3 }}>
+                          <span style={{ color: "var(--text-tertiary)", width: 80, flexShrink: 0 }}>Max height</span>
+                          <span>{mpzpPopup.maxWys} m</span>
+                        </div>
+                      )}
+                      {mpzpPopup.intenZab && (
+                        <div style={{ display: "flex", gap: 8, marginBottom: 3 }}>
+                          <span style={{ color: "var(--text-tertiary)", width: 80, flexShrink: 0 }}>Max FAR</span>
+                          <span>{mpzpPopup.intenZab}</span>
+                        </div>
+                      )}
+                    </div>
+                    {mpzpPopup.www && (
+                      <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px solid var(--border)" }}>
+                        <a
+                          href={planUrl(mpzpPopup.www) ?? "#"}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ fontSize: 11, color: "var(--brand-navy)", textDecoration: "none" }}
+                        >
+                          View MPZP details ↗
+                        </a>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </Popup>
+          )}
         </Map>
 
         {/* Plot pin overlay */}
