@@ -134,7 +134,7 @@ function PipelineChart({ data }: { data: PipelineRow[] }) {
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export function PrimaryMarketPage() {
-  const [feedDays, setFeedDays] = useState(7);
+  const [feedDays, setFeedDays] = useState(30);
 
   const [summary, setSummary] = useState<Summary | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
