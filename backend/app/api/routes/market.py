@@ -930,6 +930,44 @@ _ACTIVE_STATUSES = "('active', 'wolne', 'w', 'free', 'available', 'a')"
 # Warsaw residential PLN/m² sanity gate — excludes parsing failures from non-standard XLSX schemas
 _PRICE_GUARD = "AND m2_price > 1000"
 
+# Canonical 18 Warsaw dzielnice (lowercase, with diacritics as stored in DB)
+_WARSAW_DZIELNICE_SQL = (
+    "'śródmieście','wola','mokotów','ochota','żoliborz','bielany',"
+    "'białołęka','targówek','praga-północ','praga-południe',"
+    "'rembertów','wesoła','wawer','ursynów','wilanów','włochy','ursus','bemowo'"
+)
+_WARSAW_CITY_OR_DISTRICT = (
+    f"(UPPER(TRIM({{t}}city)) = 'WARSZAWA' OR {{t}}district IN ({_WARSAW_DZIELNICE_SQL}))"
+)
+
+import re as _re
+
+_DATASET_TITLE_PREFIXES = (
+    "Ceny ofertowe mieszkań i domów dewelopera ",
+    "Ceny ofertowe mieszkań dewelopera ",
+    "Ceny ofertowe domów dewelopera ",
+    "Ceny ofertowe lokali dewelopera ",
+)
+_DATASET_TITLE_SUFFIX_RE = _re.compile(
+    r"(\s*-\s*inwestycja\b.*$"
+    r"|\s+w\s+\d{4}\s+(i\s+\d{4}\s+)?r\.?\s*$"
+    r"|\s+od\s+\d{4}.*$"
+    r"|\s+\d{4}\s*r?\.\s*$"
+    r"|\s*\.\s*$)",
+    _re.IGNORECASE,
+)
+
+
+def _clean_dataset_title(raw: str) -> str:
+    """Strip 'Ceny ofertowe mieszkań dewelopera' prefix and year/investment suffixes."""
+    name = raw.strip()
+    for prefix in _DATASET_TITLE_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    name = _DATASET_TITLE_SUFFIX_RE.sub("", name).strip()
+    return name or raw
+
 
 @router.get("/primary-market/summary")
 async def primary_market_summary(
@@ -950,13 +988,14 @@ async def primary_market_summary(
                 WHERE LOWER(TRIM(status)) IN {_ACTIVE_STATUSES}
                   AND m2_price IS NOT NULL
                   {_PRICE_GUARD}
+                  AND {_WARSAW_CITY_OR_DISTRICT.format(t="primary_pricing.")}
             """)
         )
     ).mappings().one_or_none()
 
     moves = (
         await session.execute(
-            text("""
+            text(f"""
                 SELECT
                     COUNT(*) FILTER (
                         WHERE (price_history -> -1 ->> 'm2_price')::numeric
@@ -969,8 +1008,20 @@ async def primary_market_summary(
                 FROM primary_pricing
                 WHERE jsonb_array_length(price_history) >= 2
                   AND (price_history -> -1 ->> 'date')::date >= CURRENT_DATE - 7
+                  AND (price_history -> -1 ->> 'm2_price')::numeric > 1000
+                  AND (price_history -> -2 ->> 'm2_price')::numeric > 1000
                   AND (price_history -> -1 ->> 'm2_price')::numeric
                     IS DISTINCT FROM (price_history -> -2 ->> 'm2_price')::numeric
+                  AND ABS(
+                      (price_history -> -1 ->> 'm2_price')::numeric
+                    - (price_history -> -2 ->> 'm2_price')::numeric
+                  ) >= 50
+                  AND ABS(
+                      ((price_history -> -1 ->> 'm2_price')::numeric
+                     - (price_history -> -2 ->> 'm2_price')::numeric)
+                     / NULLIF((price_history -> -2 ->> 'm2_price')::numeric, 0) * 100
+                  ) BETWEEN 0.1 AND 10
+                  AND district IN ({_WARSAW_DZIELNICE_SQL})
             """)
         )
     ).mappings().one_or_none()
@@ -1020,6 +1071,7 @@ async def primary_market_leaderboard(
                     WHERE LOWER(TRIM(pp.status)) IN {_ACTIVE_STATUSES}
                       AND pp.m2_price IS NOT NULL
                       {_PRICE_GUARD}
+                      AND {_WARSAW_CITY_OR_DISTRICT.format(t="pp.")}
                 )
                 SELECT
                     firm_name,
@@ -1065,7 +1117,7 @@ async def primary_market_heatmap(
                     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY m2_price)) AS median_m2,
                     COUNT(*) AS unit_count
                 FROM primary_pricing
-                WHERE district IS NOT NULL
+                WHERE district IN ({_WARSAW_DZIELNICE_SQL})
                   AND LOWER(TRIM(status)) IN {_ACTIVE_STATUSES}
                   AND m2_price IS NOT NULL
                   {_PRICE_GUARD}
@@ -1095,15 +1147,12 @@ async def primary_market_price_changes(
 
     rows = (
         await session.execute(
-            text("""
+            text(f"""
                 SELECT
-                    COALESCE(df.firm_name, jd.developer_name) AS firm_name,
-                    COALESCE(df.firm_initials,
-                        UPPER(LEFT(REGEXP_REPLACE(
-                            COALESCE(df.firm_name, jd.developer_name, 'XX'), '[^A-Za-z]', '', 'g'
-                        ), 2))
-                    ) AS initials,
-                    COALESCE(pp.investment_name, jd.developer_name) AS investment_name,
+                    df.firm_name AS matched_firm_name,
+                    df.firm_initials AS matched_initials,
+                    jd.developer_name AS raw_dataset_title,
+                    pp.investment_name AS raw_investment_name,
                     pp.district,
                     (pp.price_history -> -1 ->> 'date')::date AS change_date,
                     ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
@@ -1122,18 +1171,16 @@ async def primary_market_price_changes(
                   AND (pp.price_history -> -1 ->> 'm2_price')::numeric > 1000
                   AND (pp.price_history -> -2 ->> 'm2_price')::numeric > 1000
                   AND (pp.price_history -> -1 ->> 'date')::date >= CURRENT_DATE - CAST(:days AS int)
+                  AND pp.district IN ({_WARSAW_DZIELNICE_SQL})
                 GROUP BY
-                    COALESCE(df.firm_name, jd.developer_name),
-                    COALESCE(df.firm_initials,
-                        UPPER(LEFT(REGEXP_REPLACE(
-                            COALESCE(df.firm_name, jd.developer_name, 'XX'), '[^A-Za-z]', '', 'g'
-                        ), 2))
-                    ),
-                    COALESCE(pp.investment_name, jd.developer_name),
+                    df.firm_name,
+                    df.firm_initials,
+                    jd.developer_name,
+                    pp.investment_name,
                     pp.district,
                     (pp.price_history -> -1 ->> 'date')::date
                 ORDER BY change_date DESC, unit_count DESC
-                LIMIT 50
+                LIMIT 200
             """),
             {"days": days},
         )
@@ -1143,19 +1190,45 @@ async def primary_market_price_changes(
     for r in rows:
         prev = float(r["prev_m2"]) if r["prev_m2"] else None
         curr = float(r["curr_m2"]) if r["curr_m2"] else None
-        dpct = round((curr - prev) / prev * 100, 2) if prev and curr and prev != 0 else 0.0
+        if not prev or not curr or prev == 0:
+            continue
+        dpct = round((curr - prev) / prev * 100, 2)
+        abs_move = abs(curr - prev)
+        # Sanity filters: ±10% cap, min 0.1% move, min 50 PLN/m² movement
+        if abs(dpct) > 10 or abs(dpct) < 0.1 or abs_move < 50:
+            continue
+
+        # Developer display name: use matched firm_name if available, else clean dataset title
+        raw_title = r["raw_dataset_title"] or ""
+        if r["matched_firm_name"]:
+            firm_display = r["matched_firm_name"]
+            initials = r["matched_initials"] or firm_display[:2].upper()
+        else:
+            firm_display = _clean_dataset_title(raw_title)
+            initials = (firm_display[:2].upper()) if firm_display else "??"
+
+        # Investment name: use if it differs meaningfully from the cleaned developer name
+        raw_inv = (r["raw_investment_name"] or "").strip()
+        cleaned_title = _clean_dataset_title(raw_title)
+        if raw_inv and raw_inv.lower() != cleaned_title.lower() and raw_inv.lower() != raw_title.lower():
+            investment_display = raw_inv
+        else:
+            investment_display = cleaned_title
+
         result.append({
             "change_date": r["change_date"].isoformat() if r["change_date"] else None,
-            "firm_name": r["firm_name"],
-            "initials": r["initials"] or "?",
-            "investment_name": r["investment_name"],
+            "firm_name": firm_display,
+            "initials": initials,
+            "investment_name": investment_display,
             "district": r["district"],
-            "prev_m2": int(prev) if prev else None,
-            "curr_m2": int(curr) if curr else None,
+            "prev_m2": int(prev),
+            "curr_m2": int(curr),
             "dpct": dpct,
             "unit_count": r["unit_count"],
             "dir": "up" if dpct > 0 else "down",
         })
+        if len(result) >= 50:
+            break
     return result
 
 
@@ -1168,7 +1241,7 @@ async def primary_market_pipeline(
 
     rows = (
         await session.execute(
-            text("""
+            text(f"""
                 SELECT
                     district,
                     COUNT(*) FILTER (
@@ -1179,7 +1252,7 @@ async def primary_market_pipeline(
                     ) AS reserved_units,
                     COUNT(*) AS total_units
                 FROM primary_pricing
-                WHERE district IS NOT NULL
+                WHERE district IN ({_WARSAW_DZIELNICE_SQL})
                   AND LOWER(TRIM(status)) NOT IN ('sold', 'sprzedane', 's')
                 GROUP BY district
                 ORDER BY total_units DESC
