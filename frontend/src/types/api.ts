@@ -79,11 +79,54 @@ export interface BriefHighlightItem {
   citation: string | null;
 }
 
+// Warsaw brief schema (WS4+)
+export interface WarsawKeyFact {
+  description: string;
+  entity: string | null;
+  value: string | null;
+  currency: "PLN" | "EUR" | null;
+  date_or_period: string | null;
+  citation: string | null;
+}
+
+export interface WarsawSection {
+  id: string;
+  title: string;
+  body: string;
+  key_facts: WarsawKeyFact[];
+}
+
+export interface WarsawKpiStrip {
+  avg_primary_pln_m2: number | null;
+  total_units: number | null;
+  investment_count: number | null;
+  data_freshness: string | null;
+}
+
+export interface WarsawDistrictPrice {
+  district: string;
+  unit_count: number;
+  median_pln_m2: number | null;
+  min_pln_m2: number | null;
+  max_pln_m2: number | null;
+}
+
+export interface WarsawMacroRow {
+  indicator_key?: string;
+  key?: string;
+  label?: string;
+  indicator?: string;
+  value: string | number;
+  period?: string;
+  source?: string;
+}
+
 export interface WeeklyBrief {
   id: number;
   week_ending: string;
   brief_text: string;
   brief_json: {
+    // Saudi brief keys
     executive_summary?: string;
     reit_commentary?: string;
     reit_data_gaps?: string[];
@@ -92,10 +135,29 @@ export interface WeeklyBrief {
     warehouse_commentary?: string;
     warehouse_data_gaps?: string[];
     news_intelligence?: BriefNewsItem[];
-    macro_highlights?: BriefMacroItem[];
     regulatory_highlights?: BriefHighlightItem[];
     supply_highlights?: BriefHighlightItem[];
     demand_highlights?: BriefHighlightItem[];
+
+    // Warsaw brief keys (WS4)
+    _market?: string;
+    headline?: string;
+    subhead?: string;
+    editors_note?: string;
+    sections?: WarsawSection[];
+    sources_footer?: string;
+    _kpi_strip?: WarsawKpiStrip;
+    _price_by_district?: WarsawDistrictPrice[];
+    _macro_table?: WarsawMacroRow[];
+    _week_ending_long?: string;
+    _model_id?: string;
+    _cost_usd?: number;
+    _warsaw_facts_total?: number;
+    _input_tokens?: number;
+    _output_tokens?: number;
+
+    // Shared
+    macro_highlights?: BriefMacroItem[];
     watch_list?: BriefWatchItem[];
   };
   model_id: string;

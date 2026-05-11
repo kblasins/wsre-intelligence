@@ -67,6 +67,24 @@ _SELECTORS: dict[str, list[str]] = {
         ".article-content",
         "article p",
     ],
+    # Polish sources
+    "eurobuild_cee": [
+        ".article__body",
+        ".article-body",
+        "[class*='article-content']",
+        "[class*='articleContent']",
+        ".entry-content",
+        "article .content",
+        "article p",
+    ],
+    "inwestycje_pl": [
+        ".article__body",
+        ".article-body",
+        ".entry-content",
+        "[class*='article-content']",
+        "article .content",
+        "article p",
+    ],
 }
 _DEFAULT_SELECTORS = [
     "article",
