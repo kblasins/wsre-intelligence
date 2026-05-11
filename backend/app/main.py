@@ -21,6 +21,7 @@ from app.api.routes.auth import auth_router, users_router
 from app.api.routes.briefs import router as briefs_router
 from app.api.routes.market import router as market_router
 from app.api.routes.spatial import router as spatial_router
+from app.api.routes.workbench import router as workbench_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.scheduler import start_scheduler, stop_scheduler
@@ -96,6 +97,7 @@ app.include_router(market_router)
 app.include_router(briefs_router)
 app.include_router(admin_router)
 app.include_router(spatial_router)
+app.include_router(workbench_router)
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(users_router, prefix="/api/users", tags=["users"])
 

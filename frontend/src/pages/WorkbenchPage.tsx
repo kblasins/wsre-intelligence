@@ -1,17 +1,17 @@
 // Workbench V2 — three-pane: 260px saved-deals/layers | map | 480px PlotEvaluation
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Map, { NavigationControl, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { api } from "../lib/api";
 
-// ── Static data ────────────────────────────────────────────────────────────────
-
+// ── Saved deals registry ───────────────────────────────────────────────────────
 const SAVED_DEALS = [
-  { id: "d1", label: "Białołęka greenfield 14ha", district: "Białołęka",  days: 2,  active: false },
-  { id: "d2", label: "ul. Towarowa 28 — Wola",    district: "Wola",       days: 0,  active: true  },
-  { id: "d3", label: "Mokotów Służewiec PRS",     district: "Mokotów",    days: 5,  active: false },
-  { id: "d4", label: "Praga-Płd. Kamionek plot",  district: "Praga-Płd",  days: 11, active: false },
-  { id: "d5", label: "Wilanów North 8ha",         district: "Wilanów",    days: 18, active: false },
+  { id: "d1", label: "Białołęka greenfield 14ha", district: "Białołęka",  days: 2,  plotId: null              },
+  { id: "d2", label: "ul. Towarowa 28 — Wola",    district: "Wola",       days: 0,  plotId: "demo-towarowa-28" },
+  { id: "d3", label: "Mokotów Służewiec PRS",     district: "Mokotów",    days: 5,  plotId: null              },
+  { id: "d4", label: "Praga-Płd. Kamionek plot",  district: "Praga-Płd",  days: 11, plotId: null              },
+  { id: "d5", label: "Wilanów North 8ha",         district: "Wilanów",    days: 18, plotId: null              },
 ];
 
 interface LayerChild { label: string; on: boolean; }
@@ -57,82 +57,92 @@ const INITIAL_LAYER_TREE: LayerCat[] = [
   ]},
 ];
 
-// ── Plot data ─────────────────────────────────────────────────────────────────
+// ── API types ──────────────────────────────────────────────────────────────────
 
-const PLOT = {
-  label: "ul. Towarowa 28 — Wola",
-  kw: "WA1M/00521884/3",
-  address: "ul. Towarowa 28, 01-103 Warszawa",
-  area_m2: 1247,
-  district: "Wola",
-  fnSummary: "Residential MW (MPZP enacted) · 1,247 m² · Wola",
-  mpzp: {
-    name: "Czyste — Towarowa",
-    enacted: "12 Mar 2026",
-    fn: "MW — multi-family residential",
-    far: 5.5, height: 130, coverage: 70, greenery: 25, parking: 1.2, setback: 5,
-    quote: 'Plan miejscowy obszaru "Czyste — Towarowa" reaffirms 130 m max height for parcels fronting ul. Towarowa.',
-    cite: "Uchwała Rady m. st. Warszawy LXXII/2356/2026, 12 Mar 2026",
-  },
-  landComps: {
-    median: 3840, n: 14, total_m2: 38420,
-    top: [
-      { date: "08 Apr 2026", dist: 340,  area: 2840, pln_m2: 4120, mkt: "Primary"   },
-      { date: "22 Feb 2026", dist: 520,  area: 1640, pln_m2: 3980, mkt: "Primary"   },
-      { date: "14 Jan 2026", dist: 780,  area: 5210, pln_m2: 3650, mkt: "Secondary" },
-      { date: "09 Nov 2025", dist: 410,  area:  980, pln_m2: 4480, mkt: "Primary"   },
-      { date: "02 Sep 2025", dist: 920,  area: 3120, pln_m2: 3240, mkt: "Secondary" },
-    ],
-    scatter: [
-      { area: 2840, pln_m2: 4120 }, { area: 1640, pln_m2: 3980 }, { area: 5210, pln_m2: 3650 },
-      { area:  980, pln_m2: 4480 }, { area: 3120, pln_m2: 3240 }, { area: 1820, pln_m2: 3520 },
-      { area: 2440, pln_m2: 3920 }, { area:  740, pln_m2: 4280 }, { area: 6200, pln_m2: 3140 },
-      { area: 1280, pln_m2: 3680 },
-    ],
-  },
-  apt: {
-    primary_pln: 24180, primary_30d: 1.4,
-    secondary_pln: 19420, secondary_12m: 9.1,
-    series12m_primary:   [22600,22720,22890,23010,23150,23290,23410,23560,23720,23880,24020,24180],
-    series12m_secondary: [17800,17910,18020,18180,18320,18490,18640,18790,18920,19080,19240,19420],
-  },
-  supply: {
-    units_total: 2932, units_24m: 1428, avg_price: 23720,
-    projects: [
-      { dev: "Echo Investment", name: "Stacja Wola III",          dist_m:  280, units: 240, completion: "Q4 2026", pln: 21900, sold: 142, vel: 8.0 },
-      { dev: "Develia",         name: "Wola Libero",              dist_m:  640, units: 268, completion: "Q2 2027", pln: 24650, sold:  94, vel: 6.2 },
-      { dev: "Marvipol",        name: "Unisono Wola",             dist_m:  880, units: 412, completion: "Q1 2027", pln: 22900, sold: 286, vel:11.4 },
-      { dev: "Skanska Resi.",   name: "Holm House III",           dist_m: 1080, units: 184, completion: "Q3 2026", pln: 25400, sold: 148, vel: 9.2 },
-      { dev: "Atal",            name: "Atal Towarowa",            dist_m: 1320, units: 520, completion: "Q4 2027", pln: 22150, sold: 128, vel: 5.8 },
-      { dev: "Robyg",           name: "Wola Skyline",             dist_m: 1540, units: 308, completion: "Q1 2028", pln: 23280, sold:  42, vel: 4.4 },
-      { dev: "Dom Development", name: "Browary 12",               dist_m: 1720, units: 240, completion: "Q3 2027", pln: 25180, sold:  86, vel: 7.1 },
-      { dev: "Spravia",         name: "Apartamenty Kasprzaka",    dist_m: 1880, units: 760, completion: "Q2 2028", pln: 22640, sold:  38, vel: 3.8 },
-    ],
-  },
-  demo: {
-    pop: 140820, pop_5y: 4.2, pop_series: [135150,136420,137620,138940,140820],
-    age_25_44_pct: 38.6, warsaw_avg: 32.1,
-    income: 9420, income_3y: 18.4, income_warsaw: 8740, income_series: [7960,8240,8590,8910,9420],
-    dwellings_per_1000: 472, dwellings_warsaw: 514,
-  },
-  infra: {
-    metro: { name: "M2 · Płocka", dist_m: 340 },
-    tram: { name: "23 / 24 / 28", dist_m: 120 },
-    planned: [
-      { prj: "M3 line — Wola spur",              status: "Funded",          eta: "2031",    src: "MZA"     },
-      { prj: "S8 / Towarowa interchange upgrade", status: "In construction", eta: "Q4 2026", src: "GDDKiA"  },
-    ],
-    schools: 6, hospitals: 3,
-  },
-  intel: [
-    { ts: "08 Apr 26", t: "transaction", txt: "Allianz Real Estate completes Generation Park Y · €119m at 5.85% yield.",               src: "Eurobuild CEE",         conf: 5 },
-    { ts: "28 Mar 26", t: "listing",     txt: "Echo Investment opens sales for Stacja Wola III — guide PLN 23,900/m².",                src: "Property Forum",        conf: 5 },
-    { ts: "22 Mar 26", t: "regulatory",  txt: "WSA Warsaw upholds 'Czyste-Towarowa' MPZP — 130m ceiling final.",                       src: "Rzeczpospolita · NRC",  conf: 5 },
-    { ts: "14 Mar 26", t: "sentiment",   txt: "Marvipol reports 286 of 412 units sold at Unisono Wola (69% absorption).",              src: "Bankier",               conf: 4 },
-    { ts: "06 Mar 26", t: "macro",       txt: "NBP holds reference rate at 5.25% for fourth consecutive meeting.",                      src: "NBP",                   conf: 5 },
-  ],
-};
+interface ZoningParams {
+  max_far: number | null;
+  max_height_m: number | null;
+  max_site_coverage_pct: number | null;
+  min_greenery_pct: number | null;
+  min_parking_ratio: number | null;
+  front_setback_m: number | null;
+}
+interface SectionA {
+  status: string;
+  mpzp_name: string;
+  mpzp_enacted_date: string;
+  mpzp_resolution_id: string;
+  function_code: string;
+  parameters: ZoningParams;
+  notes: string;
+  source: string;
+}
+interface LandComp { date: string; distance_m: number; area_m2: number; pln_per_m2: number; market_type: string; source: string; }
+interface ScatterDot { date: string; pln_per_m2: number; area_m2: number; }
+interface SectionB {
+  median_pln_m2: number | null;
+  comparable_tx_count: number;
+  total_m2_traded: number;
+  scatter_data: ScatterDot[];
+  top_comps: LandComp[];
+}
+interface SectionC {
+  primary_market: { median_pln_m2: number | null; change_30d_pct: number | null; n_units: number; source: string; };
+  secondary_market: { median_pln_m2: number; change_12m_pct: number; source: string; };
+  projected_exit_24m: { growth_rate_pct: number; conservative: number | null; central: number | null; optimistic: number | null; };
+}
+interface SupplyProject {
+  developer_name: string; investment_name: string; distance_m: number; units: number;
+  completion_target: string; pln_m2: number; units_sold_to_date: number; monthly_absorption: number;
+}
+interface SectionD {
+  pipeline_units: number; delivering_24mo_units: number; avg_pln_m2: number | null;
+  top_projects: SupplyProject[];
+}
+interface SectionE {
+  district: string; population_current: number; population_5y_trajectory_pct: number;
+  age_25_44_share_pct: number; age_25_44_vs_warsaw_avg_pct: number;
+  avg_monthly_earnings_pln: number; earnings_3y_trajectory_pct: number;
+  dwellings_per_1000: number; supply_status: string;
+}
+interface SectionF {
+  nearest_metro: string; metro_distance_min: number;
+  nearest_tram: string; tram_distance_min: number;
+  planned_transport: string; schools_1km_count: number; healthcare_2km_count: number;
+}
+interface RegItem { event_date: string; title: string; source: string; link_url: string | null; }
+interface SectionG { items: RegItem[]; }
+interface IntelItem {
+  timestamp: string; type: string; headline: string; source: string; confidence: number;
+  dpct?: number; prev_m2?: number; curr_m2?: number; unit_count?: number;
+}
+interface SectionH { items: IntelItem[]; }
+interface SectionIOutputs {
+  estimated_gdv_pln: number; estimated_total_cost_pln: number;
+  residual_land_value_pln_m2: number; residual_land_value_total_pln: number;
+}
+interface SectionI {
+  inputs: { build_cost_pln_m2_pum: number; target_irr_pct: number; financing_ltv_pct: number;
+            financing_rate_premium_bps: number; sales_velocity_units_per_month: number; build_duration_months: number; };
+  derived: { pum_m2: number; central_exit_price_pln_m2: number; };
+  outputs: SectionIOutputs;
+  sensitivity_matrix: { hp_lc: number; hp_hc: number; lp_lc: number; lp_hc: number; };
+}
+interface PlotMeta { plot_id: string; address: string; district: string; area_m2: number; kw_number: string; summary: string; }
+interface PlotEvalData {
+  plot: PlotMeta;
+  section_a_zoning: SectionA;
+  section_b_land_comps: SectionB;
+  section_c_exit_pricing: SectionC;
+  section_d_competing_supply: SectionD;
+  section_e_demographics: SectionE;
+  section_f_infrastructure: SectionF;
+  section_g_regulatory: SectionG;
+  section_h_recent_intelligence: SectionH;
+  section_i_underwriting_snapshot: SectionI;
+}
 
+// ── Static fallback for compare view ──────────────────────────────────────────
 const PLOT_B = {
   label: "Białołęka greenfield · 14 ha",
   kw: "WA1B/00128710/4",
@@ -146,21 +156,6 @@ const PLOT_B = {
   demo: { pop: 139000, pop_5y: 12.4, age2544: 31.2, income: 8420 },
   metro: "M3 (planned, ETA 2031)", metroDist: 1400,
   signal: "Long-dated greenfield. Pricing 5× cheaper than Wola plot but no MPZP and weaker exit price.",
-};
-
-const PLOT_A_LITE = {
-  label: "ul. Towarowa 28 — Wola",
-  kw: "WA1M/00521884/3",
-  address: "ul. Towarowa 28, 01-103 Warszawa",
-  area_m2: 1247, district: "Wola",
-  fnSummary: "MW (MPZP enacted) · 1,247 m² · Wola",
-  mpzp: { name: "Czyste — Towarowa", fn: "MW", far: 5.5, height: 130, status: "ok" as const },
-  landMedian: 3840, landN: 14,
-  apt: { primary: 24180, yoy: 14.8 },
-  supplyUnits: 2840, supplyDist: 2.0,
-  demo: { pop: 140820, pop_5y: 4.2, age2544: 38.6, income: 9420 },
-  metro: "M2 · Płocka", metroDist: 340,
-  signal: "Short-cycle infill. Premium PUM, fully entitled, but priced in.",
 };
 
 // ── Mini chart helpers ─────────────────────────────────────────────────────────
@@ -188,24 +183,32 @@ function DualLine({ a, b, h = 70 }: { a: number[]; b: number[]; h?: number }) {
   );
 }
 
-function CompsScatter() {
+function CompsScatter({ data, median }: { data: ScatterDot[]; median: number }) {
   const W = 420, H = 120, pad = 22;
-  const data = PLOT.landComps.scatter;
-  const minP = 2800, maxP = 4800;
-  const x = (i: number) => pad + (i / (data.length - 1)) * (W - pad * 2);
+  if (!data.length) return null;
+  const prices = data.map(d => d.pln_per_m2);
+  const minP = Math.min(...prices) * 0.95;
+  const maxP = Math.max(...prices) * 1.05;
+  const x = (i: number) => pad + (i / Math.max(data.length - 1, 1)) * (W - pad * 2);
   const y = (v: number) => H - pad - ((v - minP) / (maxP - minP)) * (H - pad * 2);
+  const gridVals = [
+    Math.round(minP / 500) * 500,
+    Math.round((minP + (maxP - minP) / 3) / 500) * 500,
+    Math.round((minP + (maxP - minP) * 2 / 3) / 500) * 500,
+    Math.round(maxP / 500) * 500,
+  ].filter((v, i, arr) => arr.indexOf(v) === i);
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
-      {[3000, 3500, 4000, 4500].map(v => (
+      {gridVals.map(v => (
         <g key={v}>
           <line x1={pad} x2={W - pad} y1={y(v)} y2={y(v)} stroke="#F0F0F0" />
           <text x={2} y={y(v) + 3} fontSize="9" fill="var(--text-tertiary)" fontFamily="IBM Plex Mono">{(v / 1000).toFixed(1)}k</text>
         </g>
       ))}
-      <line x1={pad} x2={W - pad} y1={y(PLOT.landComps.median)} y2={y(PLOT.landComps.median)} stroke="var(--brand-navy)" strokeWidth="1" strokeDasharray="2 2" />
-      <text x={W - pad - 1} y={y(PLOT.landComps.median) - 3} fontSize="9" fill="var(--brand-navy)" textAnchor="end">median 3.84k</text>
+      <line x1={pad} x2={W - pad} y1={y(median)} y2={y(median)} stroke="var(--brand-navy)" strokeWidth="1" strokeDasharray="2 2" />
+      <text x={W - pad - 1} y={y(median) - 3} fontSize="9" fill="var(--brand-navy)" textAnchor="end">median {(median / 1000).toFixed(2)}k</text>
       {data.map((d, i) => (
-        <circle key={i} cx={x(i)} cy={y(d.pln_m2)} r={Math.sqrt(d.area) / 12}
+        <circle key={i} cx={x(i)} cy={y(d.pln_per_m2)} r={Math.sqrt(d.area_m2) / 12}
           fill="var(--brand-navy)" fillOpacity="0.35" stroke="var(--brand-navy)" strokeWidth="0.6" />
       ))}
     </svg>
@@ -253,42 +256,39 @@ function ConfDots({ n }: { n: number }) {
   );
 }
 
-// ── Underwriting (Section I) ──────────────────────────────────────────────────
+// ── Skeleton loader ────────────────────────────────────────────────────────────
 
-function Underwriting() {
-  const [buildCost] = useState(5500);
-  const [irr] = useState(18);
-  const [ltv] = useState(65);
-  const [growth] = useState(3);
-  const [duration] = useState(24);
+function SkeletonBlock({ h = 16, w = "100%" }: { h?: number; w?: string | number }) {
+  return <div style={{ height: h, width: w, background: "var(--bg-wash)", borderRadius: 3, marginBottom: 6, animation: "pulse 1.4s ease-in-out infinite" }} />;
+}
 
-  const area = PLOT.area_m2;
-  const far = PLOT.mpzp.far;
-  const pum = area * far;
-  const exit = PLOT.apt.primary_pln * Math.pow(1 + growth / 100, 2);
-  const gdv = pum * exit / 1_000_000;
-  const cost_build = pum * buildCost / 1_000_000;
-  const cost_soft = cost_build * 0.15;
-  const debt = (cost_build + cost_soft) * (ltv / 100);
-  const finCost = debt * 0.0835 * 1.5;
-  const totalCost = cost_build + cost_soft + finCost;
-  const targetMargin = 1 + irr / 100;
-  const residual = Math.max(0, gdv - totalCost * targetMargin);
-  const residual_pln_m2 = residual * 1_000_000 / area;
+function PlotEvalSkeleton() {
+  return (
+    <aside className="eval-panel" style={{ width: 480 }}>
+      <div className="pe-id-strip">
+        <SkeletonBlock h={14} w="40%" />
+        <SkeletonBlock h={20} w="80%" />
+        <SkeletonBlock h={11} w="55%" />
+        <SkeletonBlock h={11} w="70%" />
+      </div>
+      {[...Array(4)].map((_, i) => (
+        <div key={i} className="pe-section">
+          <SkeletonBlock h={12} w="30%" />
+          <SkeletonBlock h={11} />
+          <SkeletonBlock h={11} />
+          <SkeletonBlock h={11} w="70%" />
+        </div>
+      ))}
+    </aside>
+  );
+}
 
-  const fmtM = (v: number) => v.toLocaleString("pl-PL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+// ── Underwriting (Section I) — reads from API data ────────────────────────────
+
+function Underwriting({ sec }: { sec: SectionI }) {
+  const { inputs, derived, outputs, sensitivity_matrix: sm } = sec;
+  const fmtM = (v: number) => (v / 1_000_000).toLocaleString("pl-PL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   const fmtInt = (v: number) => Math.round(v).toLocaleString("pl-PL");
-
-  function corner(pd: number, cd: number) {
-    const g = pum * exit * (1 + pd) / 1_000_000;
-    const c = (cost_build + cost_soft) * (1 + cd) + finCost;
-    const r = g - c * targetMargin;
-    return r > 0 ? r * 1_000_000 / area : 0;
-  }
-  const c_HP_LC = corner(+0.05, -0.10);
-  const c_HP_HC = corner(+0.05, +0.10);
-  const c_LP_LC = corner(-0.05, -0.10);
-  const c_LP_HC = corner(-0.05, +0.10);
 
   function SensCell({ v, tone }: { v: number; tone?: "good" | "bad" }) {
     const bg = tone === "good" ? "#ECF2EC" : tone === "bad" ? "#F2ECEC" : "#FAFAFA";
@@ -322,29 +322,29 @@ function Underwriting() {
         <div className="pe-uw-out">
           <div className="pe-uw-out-block">
             <div className="pe-uw-out-label">Estimated GDV</div>
-            <div className="pe-uw-out-gdv tnum">PLN {fmtM(gdv)}M</div>
+            <div className="pe-uw-out-gdv tnum">PLN {fmtM(outputs.estimated_gdv_pln)}M</div>
           </div>
           <div className="pe-uw-out-block" style={{ marginTop: 10 }}>
             <div className="pe-uw-out-label">Estimated total cost</div>
-            <div className="pe-uw-out-cost tnum">PLN {fmtM(totalCost)}M</div>
+            <div className="pe-uw-out-cost tnum">PLN {fmtM(outputs.estimated_total_cost_pln)}M</div>
           </div>
           <div className="pe-uw-rule" />
           <div className="pe-uw-out-label">Max land price at target IRR</div>
           <div className="pe-uw-residual tnum">
-            PLN {fmtInt(residual_pln_m2)}
+            PLN {fmtInt(outputs.residual_land_value_pln_m2)}
             <span className="pe-uw-residual-unit">/m²</span>
           </div>
           <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
-            Total: PLN {fmtM(residual)}M for {area.toLocaleString("pl-PL")} m² plot
+            Total: PLN {fmtM(outputs.residual_land_value_total_pln)}M for {derived.pum_m2.toLocaleString("pl-PL")} m² PUM
           </div>
           <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", margin: "18px 0 6px" }}>
             Sensitivity (±5% price × ±10% cost)
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-            <SensCell v={c_HP_LC} tone="good" />
-            <SensCell v={c_HP_HC} />
-            <SensCell v={c_LP_LC} />
-            <SensCell v={c_LP_HC} tone="bad" />
+            <SensCell v={sm.hp_lc} tone="good" />
+            <SensCell v={sm.hp_hc} />
+            <SensCell v={sm.lp_lc} />
+            <SensCell v={sm.lp_hc} tone="bad" />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 4, fontSize: 10, color: "var(--text-tertiary)" }}>
             <div>+price / −cost</div>
@@ -356,11 +356,11 @@ function Underwriting() {
         <div className="pe-uw-divider" />
         <div className="pe-uw-in">
           <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Inputs</div>
-          <InputRow label="Build cost"     sub="PLN/m² PUM"        value={fmtInt(buildCost)} />
-          <InputRow label="Target IRR"     sub="%"                 value={irr} />
-          <InputRow label="Financing"      sub="% LTV · WIBOR+2.5" value={`${ltv}%`} />
-          <InputRow label="Sales velocity" sub="units / mo"        value="6" />
-          <InputRow label="Build duration" sub="months"            value={duration} />
+          <InputRow label="Build cost"     sub="PLN/m² PUM"        value={fmtInt(inputs.build_cost_pln_m2_pum)} />
+          <InputRow label="Target IRR"     sub="%"                 value={inputs.target_irr_pct} />
+          <InputRow label="Financing"      sub="% LTV · WIBOR+2.5" value={`${inputs.financing_ltv_pct}%`} />
+          <InputRow label="Sales velocity" sub="units / mo"        value={inputs.sales_velocity_units_per_month} />
+          <InputRow label="Build duration" sub="months"            value={inputs.build_duration_months} />
         </div>
       </div>
       <div style={{ fontSize: 11, color: "var(--text-tertiary)", lineHeight: 1.5, marginTop: 18 }}>
@@ -372,15 +372,23 @@ function Underwriting() {
 
 // ── PlotEvaluation panel ──────────────────────────────────────────────────────
 
-function PlotEvaluation() {
+function PlotEvaluation({ data }: { data: PlotEvalData }) {
   const [saved, setSaved] = useState(true);
+  const { plot: p, section_a_zoning: a, section_b_land_comps: b, section_c_exit_pricing: c,
+          section_d_competing_supply: d, section_e_demographics: e, section_f_infrastructure: f,
+          section_g_regulatory: g, section_h_recent_intelligence: h, section_i_underwriting_snapshot: sec_i } = data;
 
-  const ratio = PLOT.demo.dwellings_per_1000 / PLOT.demo.dwellings_warsaw;
-  const supply = ratio < 0.95
+  const supplyLabel = e.supply_status === "under_supplied"
     ? { label: "under-supplied", color: "var(--up)", bg: "#ECF2EC" }
-    : ratio < 1.05
-    ? { label: "balanced", color: "var(--warn)", bg: "#F2EFE6" }
-    : { label: "over-supplied", color: "var(--down)", bg: "#F2ECEC" };
+    : e.supply_status === "over_supplied"
+    ? { label: "over-supplied", color: "var(--down)", bg: "#F2ECEC" }
+    : { label: "balanced", color: "var(--warn)", bg: "#F2EFE6" };
+
+  const fmtN = (v: number) => v.toLocaleString("pl-PL");
+  const fmtDate = (iso: string) => {
+    const d2 = new Date(iso);
+    return d2.toLocaleDateString("pl-PL", { day: "2-digit", month: "short", year: "2-digit" }).replace(" ", " ").replace(" ", " ");
+  };
 
   return (
     <aside className="eval-panel" style={{ width: 480 }}>
@@ -388,15 +396,15 @@ function PlotEvaluation() {
       <div className="pe-id-strip">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Plot Evaluation · Wola</div>
-            <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-heading)", marginTop: 4 }}>{PLOT.label}</div>
-            <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 3, fontFamily: "IBM Plex Mono" }}>KW {PLOT.kw}</div>
+            <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Plot Evaluation · {p.district.charAt(0).toUpperCase() + p.district.slice(1)}</div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-heading)", marginTop: 4 }}>ul. Towarowa 28 — Wola</div>
+            <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 3, fontFamily: "IBM Plex Mono" }}>KW {p.kw_number}</div>
           </div>
           <button className={"pe-star " + (saved ? "on" : "")} onClick={() => setSaved(!saved)} title="Save deal">★</button>
         </div>
-        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 10 }}>{PLOT.address}</div>
+        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 10 }}>{p.address}</div>
         <div style={{ fontSize: 12, color: "var(--text-primary)", marginTop: 4 }}>
-          <span className="tnum">{PLOT.area_m2.toLocaleString("pl-PL")}</span> m² · {PLOT.fnSummary}
+          <span className="tnum">{fmtN(p.area_m2)}</span> m² · {p.summary}
         </div>
         <div className="pe-actions">
           <button className="pe-btn pe-btn-primary">Generate Plot Report (PDF)</button>
@@ -408,22 +416,24 @@ function PlotEvaluation() {
       {/* A — Zoning */}
       <div className="pe-section">
         <SectionHd letter="A" title="Zoning & Planning" />
-        <div className="pe-status pe-status-ok">
-          <span className="dot" /> MPZP enacted · {PLOT.mpzp.name} · {PLOT.mpzp.enacted}
+        <div className={`pe-status ${a.status === "mpzp_enacted" ? "pe-status-ok" : "pe-status-warn"}`}>
+          <span className="dot" /> MPZP enacted · {a.mpzp_name} · {a.mpzp_enacted_date ? new Date(a.mpzp_enacted_date).toLocaleDateString("pl-PL", { day: "numeric", month: "short", year: "numeric" }) : "—"}
         </div>
         <KV rows={[
-          ["Function code",     PLOT.mpzp.fn],
-          ["Max FAR",           <span className="tnum">{PLOT.mpzp.far}</span>],
-          ["Max height",        <span><span className="tnum">{PLOT.mpzp.height}</span> m</span>],
-          ["Max site coverage", <span><span className="tnum">{PLOT.mpzp.coverage}</span>%</span>],
-          ["Min greenery",      <span><span className="tnum">{PLOT.mpzp.greenery}</span>%</span>],
-          ["Min parking ratio", <span><span className="tnum">{PLOT.mpzp.parking}</span> per unit</span>],
-          ["Front setback",     <span><span className="tnum">{PLOT.mpzp.setback}</span> m</span>],
+          ["Function code",     a.function_code],
+          ["Max FAR",           <span className="tnum">{a.parameters.max_far ?? "—"}</span>],
+          ["Max height",        <span><span className="tnum">{a.parameters.max_height_m ?? "—"}</span> m</span>],
+          ["Max site coverage", <span><span className="tnum">{a.parameters.max_site_coverage_pct ?? "—"}</span>%</span>],
+          ["Min greenery",      <span><span className="tnum">{a.parameters.min_greenery_pct ?? "—"}</span>%</span>],
+          ["Min parking ratio", <span><span className="tnum">{a.parameters.min_parking_ratio ?? "—"}</span> per unit</span>],
+          ["Front setback",     <span><span className="tnum">{a.parameters.front_setback_m ?? "—"}</span> m</span>],
         ]} />
-        <div className="source-quote">
-          {PLOT.mpzp.quote}
-          <span className="source-attr">— {PLOT.mpzp.cite}</span>
-        </div>
+        {a.notes && (
+          <div className="source-quote">
+            {a.notes}
+            {a.mpzp_resolution_id && <span className="source-attr">— {a.mpzp_resolution_id}</span>}
+          </div>
+        )}
         <a className="how-link" href="#">View MPZP text · PL ↔ EN</a>
       </div>
 
@@ -431,23 +441,27 @@ function PlotEvaluation() {
       <div className="pe-section">
         <SectionHd letter="B" title="Land comparable transactions" subtitle="Last 24 months · 1 km radius · RCN" />
         <div className="pe-stat-row">
-          <div className="stat"><div className="v tnum">3,840</div><div className="l">PLN/m² median</div></div>
-          <div className="stat"><div className="v tnum">{PLOT.landComps.n}</div><div className="l">comparable tx</div></div>
-          <div className="stat"><div className="v tnum">{(PLOT.landComps.total_m2 / 1000).toFixed(1)}k</div><div className="l">m² traded</div></div>
+          <div className="stat"><div className="v tnum">{b.median_pln_m2 ? fmtN(b.median_pln_m2) : "—"}</div><div className="l">PLN/m² median</div></div>
+          <div className="stat"><div className="v tnum">{b.comparable_tx_count}</div><div className="l">comparable tx</div></div>
+          <div className="stat"><div className="v tnum">{(b.total_m2_traded / 1000).toFixed(1)}k</div><div className="l">m² traded</div></div>
         </div>
-        <div style={{ marginTop: 12, marginBottom: 8 }}><CompsScatter /></div>
+        {b.scatter_data.length > 0 && b.median_pln_m2 && (
+          <div style={{ marginTop: 12, marginBottom: 8 }}>
+            <CompsScatter data={b.scatter_data} median={b.median_pln_m2} />
+          </div>
+        )}
         <table className="pe-table">
           <thead>
             <tr><th>Date</th><th className="num">Dist</th><th className="num">Area</th><th className="num">PLN/m²</th><th>Mkt</th></tr>
           </thead>
           <tbody>
-            {PLOT.landComps.top.map((c, i) => (
+            {b.top_comps.map((comp, i) => (
               <tr key={i}>
-                <td className="mono" style={{ fontSize: 11 }}>{c.date}</td>
-                <td className="num"><span className="tnum">{c.dist}</span> m</td>
-                <td className="num tnum">{c.area.toLocaleString("pl-PL")}</td>
-                <td className="num tnum"><strong>{c.pln_m2.toLocaleString("pl-PL")}</strong></td>
-                <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>{c.mkt}</td>
+                <td className="mono" style={{ fontSize: 11 }}>{fmtDate(comp.date)}</td>
+                <td className="num"><span className="tnum">{comp.distance_m}</span> m</td>
+                <td className="num tnum">{fmtN(comp.area_m2)}</td>
+                <td className="num tnum"><strong>{fmtN(comp.pln_per_m2)}</strong></td>
+                <td style={{ fontSize: 11, color: "var(--text-secondary)", textTransform: "capitalize" }}>{comp.market_type}</td>
               </tr>
             ))}
           </tbody>
@@ -457,62 +471,63 @@ function PlotEvaluation() {
 
       {/* C — Apartment Exit */}
       <div className="pe-section">
-        <SectionHd letter="C" title="Apartment exit pricing" subtitle="1 km radius · Jawność cen + RCN" />
+        <SectionHd letter="C" title="Apartment exit pricing" subtitle="Wola district · Jawność cen + RCN" />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div className="pe-mini-card">
             <div className="t">Primary market</div>
-            <div className="v tnum">{PLOT.apt.primary_pln.toLocaleString("pl-PL")} <span className="u">PLN/m²</span></div>
-            <div className="d" style={{ color: "var(--up)" }}>+{PLOT.apt.primary_30d}% · 30d</div>
+            <div className="v tnum">{c.primary_market.median_pln_m2 ? fmtN(c.primary_market.median_pln_m2) : "—"} <span className="u">PLN/m²</span></div>
+            {c.primary_market.change_30d_pct !== null && (
+              <div className="d" style={{ color: (c.primary_market.change_30d_pct ?? 0) >= 0 ? "var(--up)" : "var(--down)" }}>
+                {(c.primary_market.change_30d_pct ?? 0) >= 0 ? "+" : ""}{c.primary_market.change_30d_pct}% · 30d
+              </div>
+            )}
           </div>
           <div className="pe-mini-card">
             <div className="t">Secondary market</div>
-            <div className="v tnum">{PLOT.apt.secondary_pln.toLocaleString("pl-PL")} <span className="u">PLN/m²</span></div>
-            <div className="d" style={{ color: "var(--up)" }}>+{PLOT.apt.secondary_12m}% · 12m</div>
+            <div className="v tnum">{fmtN(c.secondary_market.median_pln_m2)} <span className="u">PLN/m²</span></div>
+            <div className="d" style={{ color: "var(--up)" }}>+{c.secondary_market.change_12m_pct}% · 12m</div>
           </div>
         </div>
-        <DualLine a={PLOT.apt.series12m_primary} b={PLOT.apt.series12m_secondary} />
-        <div style={{ display: "flex", gap: 14, marginTop: 6, fontSize: 11, color: "var(--text-secondary)" }}>
-          <span><span style={{ display: "inline-block", width: 14, height: 2, background: "var(--brand-navy)", verticalAlign: "middle", marginRight: 4 }} />Primary</span>
-          <span><span style={{ display: "inline-block", width: 14, height: 2, background: "var(--brand-blue-2)", verticalAlign: "middle", marginRight: 4 }} />Secondary</span>
-        </div>
         <div style={{ marginTop: 14, padding: "12px 14px", background: "var(--bg-wash)", border: "1px solid var(--border)" }}>
-          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Projected exit · 24 months · @ 3% / yr</div>
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>
+            Projected exit · 24 months · @ {c.projected_exit_24m.growth_rate_pct}% / yr
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-            <div><div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Conservative</div><div className="tnum" style={{ fontSize: 14, fontWeight: 500 }}>24,900</div></div>
-            <div><div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Central</div><div className="tnum" style={{ fontSize: 14, fontWeight: 500, color: "var(--brand-navy)" }}>25,650</div></div>
-            <div><div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Optimistic</div><div className="tnum" style={{ fontSize: 14, fontWeight: 500 }}>26,420</div></div>
+            <div><div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Conservative</div><div className="tnum" style={{ fontSize: 14, fontWeight: 500 }}>{c.projected_exit_24m.conservative ? fmtN(c.projected_exit_24m.conservative) : "—"}</div></div>
+            <div><div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Central</div><div className="tnum" style={{ fontSize: 14, fontWeight: 500, color: "var(--brand-navy)" }}>{c.projected_exit_24m.central ? fmtN(c.projected_exit_24m.central) : "—"}</div></div>
+            <div><div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Optimistic</div><div className="tnum" style={{ fontSize: 14, fontWeight: 500 }}>{c.projected_exit_24m.optimistic ? fmtN(c.projected_exit_24m.optimistic) : "—"}</div></div>
           </div>
         </div>
       </div>
 
       {/* D — Competing Supply */}
       <div className="pe-section">
-        <SectionHd letter="D" title="Competing residential supply" subtitle="2 km radius · pipeline + permitted" />
+        <SectionHd letter="D" title="Competing residential supply" subtitle="Wola district · Jawność pipeline" />
         <div className="pe-stat-row">
-          <div className="stat"><div className="v tnum">{PLOT.supply.units_total.toLocaleString("pl-PL")}</div><div className="l">units in pipeline</div></div>
-          <div className="stat"><div className="v tnum">{PLOT.supply.units_24m.toLocaleString("pl-PL")}</div><div className="l">deliver ≤24 m</div></div>
-          <div className="stat"><div className="v tnum">{PLOT.supply.avg_price.toLocaleString("pl-PL")}</div><div className="l">avg PLN/m²</div></div>
+          <div className="stat"><div className="v tnum">{fmtN(d.pipeline_units)}</div><div className="l">units in pipeline</div></div>
+          <div className="stat"><div className="v tnum">{fmtN(d.delivering_24mo_units)}</div><div className="l">deliver ≤24 m</div></div>
+          <div className="stat"><div className="v tnum">{d.avg_pln_m2 ? fmtN(d.avg_pln_m2) : "—"}</div><div className="l">avg PLN/m²</div></div>
         </div>
         <table className="pe-table" style={{ marginTop: 12 }}>
           <thead>
             <tr>
-              <th style={{ minWidth: 96 }}>Developer</th><th>Project</th>
+              <th style={{ minWidth: 80 }}>Developer</th><th>Project</th>
               <th className="num">Dist</th><th className="num">Units</th>
               <th>Compl.</th><th className="num">PLN/m²</th>
               <th className="num">Sold</th><th className="num">/mo</th>
             </tr>
           </thead>
           <tbody>
-            {PLOT.supply.projects.map((p, i) => (
+            {d.top_projects.map((proj, i) => (
               <tr key={i}>
-                <td style={{ fontSize: 12, fontWeight: 500 }}>{p.dev}</td>
-                <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>{p.name}</td>
-                <td className="num tnum">{p.dist_m} m</td>
-                <td className="num tnum">{p.units}</td>
-                <td className="mono" style={{ fontSize: 11, color: "var(--text-secondary)" }}>{p.completion}</td>
-                <td className="num tnum"><strong>{p.pln.toLocaleString("pl-PL")}</strong></td>
-                <td className="num tnum">{p.sold}</td>
-                <td className="num tnum">{p.vel.toFixed(1)}</td>
+                <td style={{ fontSize: 11, fontWeight: 500, maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{proj.developer_name}</td>
+                <td style={{ fontSize: 10, color: "var(--text-secondary)", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{proj.investment_name}</td>
+                <td className="num tnum">{fmtN(proj.distance_m)} m</td>
+                <td className="num tnum">{proj.units}</td>
+                <td className="mono" style={{ fontSize: 10, color: "var(--text-secondary)" }}>{proj.completion_target}</td>
+                <td className="num tnum"><strong>{fmtN(proj.pln_m2)}</strong></td>
+                <td className="num tnum">{proj.units_sold_to_date}</td>
+                <td className="num tnum">{proj.monthly_absorption.toFixed(1)}</td>
               </tr>
             ))}
           </tbody>
@@ -522,30 +537,31 @@ function PlotEvaluation() {
 
       {/* E — Demographics */}
       <div className="pe-section">
-        <SectionHd letter="E" title="Demographics & macro" subtitle="Wola · gmina + dzielnica" />
+        <SectionHd letter="E" title="Demographics & macro" subtitle={`${e.district.charAt(0).toUpperCase() + e.district.slice(1)} · GUS BDL`} />
         <div className="kv">
           <div className="k">Population</div>
           <div className="v">
-            <span className="tnum">{PLOT.demo.pop.toLocaleString("pl-PL")}</span>
-            <SparkLine data={PLOT.demo.pop_series} />
-            <span style={{ display: "block", fontSize: 10, color: "var(--up)", marginTop: 1 }}>+{PLOT.demo.pop_5y}% · 5y</span>
+            <span className="tnum">{fmtN(e.population_current)}</span>
+            <span style={{ display: "block", fontSize: 10, color: "var(--up)", marginTop: 1 }}>+{e.population_5y_trajectory_pct}% · 5y</span>
           </div>
           <div className="k">Age 25–44</div>
           <div className="v">
-            <span className="tnum">{PLOT.demo.age_25_44_pct}%</span>
-            <span style={{ display: "block", fontSize: 10, color: "var(--text-secondary)", marginTop: 1 }}>vs Warsaw {PLOT.demo.warsaw_avg}%</span>
+            <span className="tnum">{e.age_25_44_share_pct}%</span>
+            <span style={{ display: "block", fontSize: 10, color: "var(--text-secondary)", marginTop: 1 }}>Warsaw avg {e.age_25_44_vs_warsaw_avg_pct}%</span>
           </div>
           <div className="k">Avg gross / mo</div>
           <div className="v">
-            PLN <span className="tnum">{PLOT.demo.income.toLocaleString("pl-PL")}</span>
-            <SparkLine data={PLOT.demo.income_series} />
-            <span style={{ display: "block", fontSize: 10, color: "var(--up)", marginTop: 1 }}>+{PLOT.demo.income_3y}% · 3y</span>
+            PLN <span className="tnum">{fmtN(e.avg_monthly_earnings_pln)}</span>
+            <span style={{ display: "block", fontSize: 10, color: "var(--up)", marginTop: 1 }}>+{e.earnings_3y_trajectory_pct}% · 3y</span>
           </div>
           <div className="k">Dwellings / 1,000</div>
           <div className="v">
-            <span className="tnum">{PLOT.demo.dwellings_per_1000}</span>
-            <span style={{ display: "inline-block", marginLeft: 8, padding: "2px 6px", fontSize: 10, fontWeight: 500, background: supply.bg, color: supply.color, textTransform: "uppercase", letterSpacing: "0.3px", verticalAlign: "middle" }}>{supply.label}</span>
-            <span style={{ display: "block", fontSize: 10, color: "var(--text-secondary)", marginTop: 1 }}>Warsaw {PLOT.demo.dwellings_warsaw}</span>
+            <span className="tnum">{e.dwellings_per_1000}</span>
+            <span style={{ display: "inline-block", marginLeft: 8, padding: "2px 6px", fontSize: 10, fontWeight: 500,
+              background: supplyLabel.bg, color: supplyLabel.color,
+              textTransform: "uppercase", letterSpacing: "0.3px", verticalAlign: "middle" }}>
+              {supplyLabel.label}
+            </span>
           </div>
         </div>
         <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 14 }}>GUS BDL · 2025 Q4</div>
@@ -556,71 +572,62 @@ function PlotEvaluation() {
         <SectionHd letter="F" title="Infrastructure" subtitle="Distance to amenities" />
         <div className="kv">
           <div className="k">Nearest metro</div>
-          <div className="v">Rondo Daszyńskiego · M2 · <span className="tnum">4</span> min</div>
+          <div className="v">{f.nearest_metro} · <span className="tnum">{f.metro_distance_min}</span> min walk</div>
           <div className="k">Nearest tram</div>
-          <div className="v">{PLOT.infra.tram.name} · <span className="tnum">{PLOT.infra.tram.dist_m}</span> m</div>
+          <div className="v">{f.nearest_tram} · <span className="tnum">{f.tram_distance_min}</span> min walk</div>
           <div className="k">Schools (1 km)</div>
-          <div className="v tnum">{PLOT.infra.schools}</div>
+          <div className="v tnum">{f.schools_1km_count}</div>
           <div className="k">Healthcare (2 km)</div>
-          <div className="v tnum">{PLOT.infra.hospitals}</div>
+          <div className="v tnum">{f.healthcare_2km_count}</div>
         </div>
-        <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", margin: "16px 0 0" }}>Planned transport · 5 km</div>
-        {PLOT.infra.planned.map((p, i) => {
-          const st = p.status === "Funded"
-            ? { bg: "var(--bg-wash)", c: "var(--brand-navy)" }
-            : p.status === "In construction"
-            ? { bg: "#ECF2EC", c: "var(--up)" }
-            : { bg: "#F2EFE6", c: "var(--warn)" };
-          return (
-            <div key={i} style={{ padding: "9px 0", borderTop: "1px solid var(--divider)", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, gap: 8 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12 }}>{p.prj}</div>
-                <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 1 }}>{p.src} · ETA {p.eta}</div>
-              </div>
-              <span style={{ fontSize: 10, padding: "2px 6px", background: st.bg, color: st.c, textTransform: "uppercase", fontWeight: 500, letterSpacing: "0.3px" }}>{p.status}</span>
+        {f.planned_transport && (
+          <>
+            <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", margin: "16px 0 6px" }}>Planned transport</div>
+            <div style={{ padding: "9px 0", borderTop: "1px solid var(--divider)", fontSize: 12, color: "var(--text-primary)", lineHeight: 1.4 }}>
+              {f.planned_transport}
             </div>
-          );
-        })}
+          </>
+        )}
       </div>
 
       {/* G — Regulatory */}
       <div className="pe-section">
-        <SectionHd letter="G" title="Regulatory & political" subtitle="Risk indicators · Wola" />
-        {[
-          { date: "02 Mar 26", cat: "Council",       t: "Resolution LXXII/2356/2026 — MPZP Czyste-Towarowa enacted (low risk)." },
-          { date: "14 Jan 26", cat: "Council",       t: "Motion to review Wola green-cover ratios — referred to committee, no draft yet." },
-          { date: "—",         cat: "Environmental", t: "No Natura 2000 within plot. Closest: Łęgi Czerniakowskie 4.2 km. Heritage zone informational only." },
-          { date: "21 May 26", cat: "Consultation",  t: "Public consultation — Wola corridor parking strategy. Window closes 21 May 2026." },
-        ].map((it, i) => (
-          <div key={i} style={{ display: "grid", gridTemplateColumns: "68px 1fr 14px", gap: 10, padding: "10px 0", borderTop: i ? "1px solid var(--divider)" : "none", alignItems: "flex-start" }}>
+        <SectionHd letter="G" title="Regulatory & political" subtitle={`Risk indicators · ${e.district.charAt(0).toUpperCase() + e.district.slice(1)}`} />
+        {g.items.map((item, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "72px 1fr 14px", gap: 10, padding: "10px 0", borderTop: i ? "1px solid var(--divider)" : "none", alignItems: "flex-start" }}>
             <div>
-              <div className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{it.date}</div>
-              <div style={{ fontSize: 9, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.3px", marginTop: 2 }}>{it.cat}</div>
+              <div className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{fmtDate(item.event_date)}</div>
+              <div style={{ fontSize: 9, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.3px", marginTop: 2 }}>{(item.source.split("/")[0] ?? item.source).trim()}</div>
             </div>
-            <div style={{ fontSize: 12, color: "var(--text-primary)", lineHeight: 1.4 }}>{it.t}</div>
-            <a href="#" style={{ fontSize: 11, color: "var(--text-tertiary)", textAlign: "right" }}>↗</a>
+            <div style={{ fontSize: 12, color: "var(--text-primary)", lineHeight: 1.4 }}>{item.title}</div>
+            {item.link_url
+              ? <a href={item.link_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "var(--text-tertiary)", textAlign: "right" }}>↗</a>
+              : <span style={{ fontSize: 11, color: "var(--border)", textAlign: "right" }}>↗</span>
+            }
           </div>
         ))}
       </div>
 
       {/* H — Recent Intelligence */}
       <div className="pe-section">
-        <SectionHd letter="H" title="Recent intelligence" subtitle="Last 30 days · Wola + residential primary" />
-        {PLOT.intel.map((it, i) => (
+        <SectionHd letter="H" title="Recent intelligence" subtitle={`Last 30 days · ${e.district.charAt(0).toUpperCase() + e.district.slice(1)} + residential primary`} />
+        {h.items.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--text-tertiary)", padding: "10px 0" }}>No price-change events in last 30 days.</div>
+        ) : h.items.map((item, i) => (
           <div key={i} style={{ padding: "11px 0", borderTop: i ? "1px solid var(--divider)" : "none" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-              <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{it.ts}</span>
-              <span className={"type-pill " + it.t} style={{ fontSize: 9 }}>{it.t}</span>
-              <span style={{ marginLeft: "auto" }}><ConfDots n={it.conf} /></span>
+              <span className="mono" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{fmtDate(item.timestamp)}</span>
+              <span className={"type-pill " + item.type} style={{ fontSize: 9 }}>{item.type}</span>
+              <span style={{ marginLeft: "auto" }}><ConfDots n={item.confidence} /></span>
             </div>
-            <div style={{ fontSize: 12, color: "var(--text-primary)", lineHeight: 1.45 }}>{it.txt}</div>
-            <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 3 }}>{it.src}</div>
+            <div style={{ fontSize: 12, color: "var(--text-primary)", lineHeight: 1.45 }}>{item.headline}</div>
+            <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 3 }}>{item.source}</div>
           </div>
         ))}
       </div>
 
       {/* I — Underwriting */}
-      <Underwriting />
+      <Underwriting sec={sec_i} />
 
       {/* Footer */}
       <div className="pe-footer">
@@ -638,8 +645,57 @@ function PlotEvaluation() {
 
 // ── PlotCompareView ───────────────────────────────────────────────────────────
 
-function PlotCol({ p, isA }: { p: typeof PLOT_A_LITE | typeof PLOT_B; isA: boolean }) {
+function PlotCol({ p, isA, liveData }: { p: typeof PLOT_B; isA: boolean; liveData?: PlotEvalData | undefined }) {
   const fmtN = (v: number) => v.toLocaleString("pl-PL");
+
+  if (isA && liveData) {
+    const ld = liveData;
+    return (
+      <div style={{ flex: 1, padding: "18px 20px", borderRight: "1px solid var(--border)", minWidth: 0, overflowY: "auto" }}>
+        <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Plot A</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-heading)", marginTop: 4 }}>ul. Towarowa 28 — Wola</div>
+        <div className="mono" style={{ fontSize: 10, color: "var(--text-secondary)", marginTop: 3 }}>KW {ld.plot.kw_number}</div>
+        <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 8 }}>{ld.plot.address}</div>
+        <div style={{ fontSize: 11, marginTop: 4 }}><span className="tnum">{fmtN(ld.plot.area_m2)}</span> m² · {ld.plot.district.charAt(0).toUpperCase() + ld.plot.district.slice(1)}</div>
+        <div style={{ marginTop: 14, padding: "8px 10px", background: "#ECF2EC", border: "1px solid rgba(31,107,58,0.2)", fontSize: 11, lineHeight: 1.4 }}>
+          <div style={{ fontWeight: 500, color: "var(--up)" }}>● MPZP enacted</div>
+          <div style={{ color: "var(--text-secondary)", marginTop: 2 }}>{ld.section_a_zoning.mpzp_name}</div>
+          <div style={{ marginTop: 4 }}>FAR <span className="tnum">{ld.section_a_zoning.parameters.max_far}</span> · H <span className="tnum">{ld.section_a_zoning.parameters.max_height_m}</span>m · {ld.section_a_zoning.function_code}</div>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Land comp</div>
+          <div className="tnum" style={{ fontSize: 18, fontWeight: 500 }}>{ld.section_b_land_comps.median_pln_m2 ? fmtN(ld.section_b_land_comps.median_pln_m2) : "—"} <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400 }}>PLN/m²</span></div>
+          <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>median · {ld.section_b_land_comps.comparable_tx_count} comps · 1 km</div>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Apt exit (primary)</div>
+          <div className="tnum" style={{ fontSize: 18, fontWeight: 500 }}>{ld.section_c_exit_pricing.primary_market.median_pln_m2 ? fmtN(ld.section_c_exit_pricing.primary_market.median_pln_m2) : "—"} <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400 }}>PLN/m²</span></div>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Competing supply</div>
+          <div className="tnum" style={{ fontSize: 14, fontWeight: 500 }}>{fmtN(ld.section_d_competing_supply.pipeline_units)} units</div>
+        </div>
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--divider)" }}>
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Demographics</div>
+          <div style={{ fontSize: 11, lineHeight: 1.6 }}>
+            Pop <span className="tnum">{fmtN(ld.section_e_demographics.population_current)}</span> · <span style={{ color: "var(--up)" }}>+{ld.section_e_demographics.population_5y_trajectory_pct}% 5y</span><br />
+            Age 25–44 <span className="tnum">{ld.section_e_demographics.age_25_44_share_pct}%</span><br />
+            Avg inc PLN <span className="tnum">{fmtN(ld.section_e_demographics.avg_monthly_earnings_pln)}</span>/mo
+          </div>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Transit</div>
+          <div style={{ fontSize: 11 }}>{ld.section_f_infrastructure.nearest_metro}</div>
+          <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{ld.section_f_infrastructure.metro_distance_min} min walk</div>
+        </div>
+        <div style={{ marginTop: 14, padding: "10px 12px", background: "var(--bg-wash)", fontSize: 11, lineHeight: 1.5 }}>
+          <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 4 }}>Signal</div>
+          Short-cycle infill. Premium PUM, fully entitled.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ flex: 1, padding: "18px 20px", borderRight: isA ? "1px solid var(--border)" : "none", minWidth: 0, overflowY: "auto" }}>
       <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{isA ? "Plot A" : "Plot B"}</div>
@@ -649,51 +705,40 @@ function PlotCol({ p, isA }: { p: typeof PLOT_A_LITE | typeof PLOT_B; isA: boole
       <div style={{ fontSize: 11, color: "var(--text-primary)", marginTop: 4 }}>
         <span className="tnum">{fmtN(p.area_m2)}</span> m² · {p.district}
       </div>
-
-      <div style={{ marginTop: 14, padding: "8px 10px", background: p.mpzp.status === "ok" ? "#ECF2EC" : "#FFF8E1", border: "1px solid " + (p.mpzp.status === "ok" ? "rgba(31,107,58,0.2)" : "rgba(180,138,0,0.2)"), fontSize: 11, lineHeight: 1.4 }}>
-        <div style={{ fontWeight: 500, color: p.mpzp.status === "ok" ? "var(--up)" : "#8B6914" }}>
-          {p.mpzp.status === "ok" ? "● MPZP enacted" : "▲ No MPZP"}
-        </div>
+      <div style={{ marginTop: 14, padding: "8px 10px", background: "#FFF8E1", border: "1px solid rgba(180,138,0,0.2)", fontSize: 11 }}>
+        <div style={{ fontWeight: 500, color: "#8B6914" }}>▲ No MPZP</div>
         <div style={{ color: "var(--text-secondary)", marginTop: 2 }}>{p.mpzp.name}</div>
-        <div style={{ color: "var(--text-primary)", marginTop: 4 }}>
-          FAR <span className="tnum">{p.mpzp.far}</span> · H <span className="tnum">{p.mpzp.height}</span>m · {p.mpzp.fn}
-        </div>
+        <div style={{ marginTop: 4 }}>FAR <span className="tnum">{p.mpzp.far}</span> · H <span className="tnum">{p.mpzp.height}</span>m · {p.mpzp.fn}</div>
       </div>
-
       <div style={{ marginTop: 14 }}>
         <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Land comp</div>
         <div className="tnum" style={{ fontSize: 18, fontWeight: 500 }}>{fmtN(p.landMedian)} <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400 }}>PLN/m²</span></div>
         <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>median · {p.landN} comps · 1 km</div>
       </div>
-
       <div style={{ marginTop: 14 }}>
         <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Apt exit (primary)</div>
         <div className="tnum" style={{ fontSize: 18, fontWeight: 500 }}>{fmtN(p.apt.primary)} <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400 }}>PLN/m²</span></div>
         <div style={{ fontSize: 11, color: "var(--up)" }}>+{p.apt.yoy.toFixed(1)}% YoY</div>
       </div>
-
       <div style={{ marginTop: 14 }}>
         <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Competing supply</div>
         <div className="tnum" style={{ fontSize: 14, fontWeight: 500 }}>{fmtN(p.supplyUnits)} units</div>
         <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>within {p.supplyDist} km</div>
       </div>
-
       <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--divider)" }}>
         <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Demographics</div>
-        <div style={{ fontSize: 11, lineHeight: 1.6, color: "var(--text-primary)" }}>
+        <div style={{ fontSize: 11, lineHeight: 1.6 }}>
           Pop <span className="tnum">{fmtN(p.demo.pop)}</span> · <span style={{ color: "var(--up)" }}>+{p.demo.pop_5y}% 5y</span><br />
           Age 25–44 <span className="tnum">{p.demo.age2544}%</span><br />
           Avg inc PLN <span className="tnum">{fmtN(p.demo.income)}</span>/mo
         </div>
       </div>
-
       <div style={{ marginTop: 14 }}>
         <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Transit</div>
-        <div style={{ fontSize: 11, color: "var(--text-primary)" }}>{p.metro}</div>
+        <div style={{ fontSize: 11 }}>{p.metro}</div>
         <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{fmtN(p.metroDist)} m walk</div>
       </div>
-
-      <div style={{ marginTop: 14, padding: "10px 12px", background: "var(--bg-wash)", fontSize: 11, lineHeight: 1.5, color: "var(--text-primary)" }}>
+      <div style={{ marginTop: 14, padding: "10px 12px", background: "var(--bg-wash)", fontSize: 11, lineHeight: 1.5 }}>
         <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 4 }}>Signal</div>
         {p.signal}
       </div>
@@ -701,7 +746,7 @@ function PlotCol({ p, isA }: { p: typeof PLOT_A_LITE | typeof PLOT_B; isA: boole
   );
 }
 
-function PlotCompareView() {
+function PlotCompareView({ liveData }: { liveData: PlotEvalData | null }) {
   return (
     <aside className="eval-panel" style={{ width: 560, display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
@@ -714,7 +759,7 @@ function PlotCompareView() {
         </button>
       </div>
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        <PlotCol p={PLOT_A_LITE} isA={true} />
+        <PlotCol p={PLOT_B} isA={true} liveData={liveData ?? undefined} />
         <PlotCol p={PLOT_B} isA={false} />
       </div>
       <div style={{ padding: "12px 18px", borderTop: "1px solid var(--border)", fontSize: 11, color: "var(--text-tertiary)", background: "#FAFAFA", lineHeight: 1.5, flexShrink: 0 }}>
@@ -726,9 +771,8 @@ function PlotCompareView() {
 
 // ── Left rail ─────────────────────────────────────────────────────────────────
 
-function LeftRail() {
+function LeftRail({ activeDeal, onSelectDeal }: { activeDeal: string; onSelectDeal: (id: string) => void }) {
   const [tree, setTree] = useState<LayerCat[]>(INITIAL_LAYER_TREE);
-  const [activeDeal, setActiveDeal] = useState("d2");
   const [dateRange, setDateRange] = useState("24 m");
 
   function toggleCat(k: string) {
@@ -741,7 +785,7 @@ function LeftRail() {
       <div className="layer-section">
         <div className="hd">Saved Deals</div>
         {SAVED_DEALS.map(d => (
-          <div key={d.id} className={"saved-deal " + (d.id === activeDeal ? "active" : "")} onClick={() => setActiveDeal(d.id)}>
+          <div key={d.id} className={"saved-deal " + (d.id === activeDeal ? "active" : "")} onClick={() => onSelectDeal(d.id)}>
             <div className="thumb" aria-hidden="true">
               <svg viewBox="0 0 40 40" style={{ width: "100%", height: "100%" }}>
                 <rect width="40" height="40" fill="#F0F0F0" />
@@ -822,10 +866,60 @@ const WARSAW = { longitude: 21.017, latitude: 52.237, zoom: 13 };
 export function WorkbenchPage() {
   const mapRef = useRef<MapRef>(null);
   const [compareOn, setCompareOn] = useState(false);
+  const [activeDeal, setActiveDeal] = useState("d2");
+  const [plotData, setPlotData] = useState<PlotEvalData | null>(null);
+  const [plotLoading, setPlotLoading] = useState(false);
+  const [plotError, setPlotError] = useState<string | null>(null);
+
+  // Fetch plot evaluation when active deal changes
+  useEffect(() => {
+    const deal = SAVED_DEALS.find(d => d.id === activeDeal);
+    if (!deal?.plotId) {
+      setPlotData(null);
+      return;
+    }
+    const plotId = deal.plotId;
+    setPlotLoading(true);
+    setPlotError(null);
+
+    api.get<PlotEvalData>(`/api/workbench/plot/${plotId}`)
+      .then(data => {
+        setPlotData(data);
+        setPlotLoading(false);
+      })
+      .catch(err => {
+        console.error("Plot evaluation fetch failed:", err);
+        setPlotError("Plot data unavailable");
+        setPlotLoading(false);
+      });
+  }, [activeDeal]);
+
+  function renderRightRail() {
+    if (compareOn) return <PlotCompareView liveData={plotData} />;
+    if (plotLoading) return <PlotEvalSkeleton />;
+    if (plotError) {
+      return (
+        <aside className="eval-panel" style={{ width: 480, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ textAlign: "center", color: "var(--text-secondary)", fontSize: 13 }}>
+            <div style={{ fontSize: 20, marginBottom: 8 }}>⚠</div>
+            {plotError}
+          </div>
+        </aside>
+      );
+    }
+    if (plotData) return <PlotEvaluation data={plotData} />;
+    return (
+      <aside className="eval-panel" style={{ width: 480, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ textAlign: "center", color: "var(--text-tertiary)", fontSize: 12 }}>
+          Select a saved deal to load Plot Evaluation
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <div style={{ display: "flex", height: "calc(100vh - 100px)", background: "#fff", overflow: "hidden" }}>
-      <LeftRail />
+      <LeftRail activeDeal={activeDeal} onSelectDeal={setActiveDeal} />
 
       {/* Map */}
       <div style={{ flex: 1, position: "relative", overflow: "hidden", borderRight: "1px solid var(--border)" }}>
@@ -852,7 +946,7 @@ export function WorkbenchPage() {
       </div>
 
       {/* Right rail */}
-      {compareOn ? <PlotCompareView /> : <PlotEvaluation />}
+      {renderRightRail()}
     </div>
   );
 }
