@@ -57,6 +57,25 @@ const INITIAL_LAYER_TREE: LayerCat[] = [
   ]},
 ];
 
+// ── POI layer configuration ────────────────────────────────────────────────────
+
+// Maps infra layer label → OSM category fetched from /api/workbench/pois
+const INFRA_POI: Record<string, string> = {
+  "Metro + planned extensions": "metro_station",
+  "Tram": "tram_stop",
+  "Schools": "school",
+  "Hospitals": "healthcare",
+  "Parks": "park",
+};
+
+const POI_LAYER_STYLE: Record<string, { color: string; radius: number; opacity: number }> = {
+  metro_station: { color: "#002060", radius: 6, opacity: 0.9 },
+  tram_stop:     { color: "#002060", radius: 3, opacity: 0.7 },
+  school:        { color: "#14326D", radius: 5, opacity: 0.75 },
+  healthcare:    { color: "#8B1F1F", radius: 5, opacity: 0.75 },
+  park:          { color: "#1F6B3A", radius: 4, opacity: 0.6 },
+};
+
 // ── API types ──────────────────────────────────────────────────────────────────
 
 interface ZoningParams {
@@ -771,12 +790,36 @@ function PlotCompareView({ liveData }: { liveData: PlotEvalData | null }) {
 
 // ── Left rail ─────────────────────────────────────────────────────────────────
 
-function LeftRail({ activeDeal, onSelectDeal }: { activeDeal: string; onSelectDeal: (id: string) => void }) {
+function LeftRail({
+  activeDeal,
+  onSelectDeal,
+  onInfraToggle,
+}: {
+  activeDeal: string;
+  onSelectDeal: (id: string) => void;
+  onInfraToggle: (category: string, on: boolean) => void;
+}) {
   const [tree, setTree] = useState<LayerCat[]>(INITIAL_LAYER_TREE);
   const [dateRange, setDateRange] = useState("24 m");
 
   function toggleCat(k: string) {
     setTree(t => t.map(c => c.key === k ? { ...c, open: !c.open } : c));
+  }
+
+  function toggleChild(catKey: string, childIdx: number) {
+    setTree(t => t.map(cat => {
+      if (cat.key !== catKey) return cat;
+      const children = cat.children.map((ch, i) => {
+        if (i !== childIdx) return ch;
+        const next = { ...ch, on: !ch.on };
+        const poiCat = INFRA_POI[ch.label];
+        if (catKey === "infra" && poiCat) {
+          onInfraToggle(poiCat, next.on);
+        }
+        return next;
+      });
+      return { ...cat, children };
+    }));
   }
 
   return (
@@ -817,7 +860,12 @@ function LeftRail({ activeDeal, onSelectDeal }: { activeDeal: string; onSelectDe
               <span className="chev">{cat.open ? "▾" : "▸"}</span>
             </div>
             {cat.open && cat.children.map((ch, i) => (
-              <div key={i} className="layer-row sub">
+              <div
+                key={i}
+                className="layer-row sub"
+                style={{ cursor: "pointer" }}
+                onClick={() => toggleChild(cat.key, i)}
+              >
                 <span className={"cbox " + (ch.on ? "on" : "")} />
                 <span>{ch.label}</span>
               </div>
@@ -871,6 +919,74 @@ export function WorkbenchPage() {
   const [plotLoading, setPlotLoading] = useState(false);
   const [plotError, setPlotError] = useState<string | null>(null);
 
+  // POI layer state
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [poiEnabled, setPoiEnabled] = useState<Record<string, boolean>>({ metro_station: true });
+  const [poiData, setPoiData] = useState<Record<string, { type: string; features: unknown[] }>>({});
+
+  function handleInfraToggle(category: string, on: boolean) {
+    setPoiEnabled(prev => ({ ...prev, [category]: on }));
+  }
+
+  // Fetch POI GeoJSON for newly-enabled categories
+  useEffect(() => {
+    const toFetch = Object.entries(poiEnabled)
+      .filter(([, on]) => on)
+      .map(([cat]) => cat)
+      .filter(cat => !poiData[cat]);
+    if (!toFetch.length) return;
+
+    const token = localStorage.getItem("ws_token");
+    fetch(`/api/workbench/pois?categories=${toFetch.join(",")}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => r.json())
+      .then((fc: { type: string; features: { properties: { category: string } }[] }) => {
+        const byCat: Record<string, { type: string; features: unknown[] }> = {};
+        for (const cat of toFetch) byCat[cat] = { type: "FeatureCollection", features: [] };
+        for (const f of fc.features) {
+          const cat = f.properties.category;
+          if (byCat[cat]) byCat[cat].features.push(f);
+        }
+        setPoiData(prev => ({ ...prev, ...byCat }));
+      })
+      .catch(err => console.error("POI fetch failed:", err));
+  }, [poiEnabled]);
+
+  // Sync MapLibre layers when data or visibility changes
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map || !mapLoaded) return;
+
+    for (const [cat, style] of Object.entries(POI_LAYER_STYLE)) {
+      const sourceId = `poi-${cat}`;
+      const layerId = `poi-layer-${cat}`;
+      const on = !!poiEnabled[cat];
+      const data = poiData[cat];
+
+      if (on && data) {
+        if (!map.getSource(sourceId)) {
+          map.addSource(sourceId, { type: "geojson", data } as Parameters<typeof map.addSource>[1]);
+          map.addLayer({
+            id: layerId,
+            type: "circle",
+            source: sourceId,
+            paint: {
+              "circle-color": style.color,
+              "circle-radius": style.radius,
+              "circle-opacity": style.opacity,
+            },
+          });
+        } else {
+          (map.getSource(sourceId) as unknown as { setData: (d: unknown) => void }).setData(data);
+          if (map.getLayer(layerId)) map.setLayoutProperty(layerId, "visibility", "visible");
+        }
+      } else if (!on && map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", "none");
+      }
+    }
+  }, [poiData, poiEnabled, mapLoaded]);
+
   // Fetch plot evaluation when active deal changes
   useEffect(() => {
     const deal = SAVED_DEALS.find(d => d.id === activeDeal);
@@ -919,7 +1035,7 @@ export function WorkbenchPage() {
 
   return (
     <div style={{ display: "flex", height: "calc(100vh - 100px)", background: "#fff", overflow: "hidden" }}>
-      <LeftRail activeDeal={activeDeal} onSelectDeal={setActiveDeal} />
+      <LeftRail activeDeal={activeDeal} onSelectDeal={setActiveDeal} onInfraToggle={handleInfraToggle} />
 
       {/* Map */}
       <div style={{ flex: 1, position: "relative", overflow: "hidden", borderRight: "1px solid var(--border)" }}>
@@ -928,6 +1044,7 @@ export function WorkbenchPage() {
           initialViewState={WARSAW}
           style={{ width: "100%", height: "100%" }}
           mapStyle="https://tiles.openfreemap.org/styles/liberty"
+          onLoad={() => setMapLoaded(true)}
         >
           <NavigationControl position="top-left" showCompass={false} />
         </Map>
