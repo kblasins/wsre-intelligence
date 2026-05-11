@@ -229,6 +229,44 @@ class IsochroneCache(Base):
     )
 
 
+class WarsawPOI(Base):
+    """Warsaw point of interest — sourced from OpenStreetMap via Overpass API.
+
+    Separate from the Saudi-focused POI table. Covers 6 categories used as
+    Workbench map layers: school, healthcare, park, metro_station, tram_stop,
+    rail_station.
+    """
+
+    __tablename__ = "warsaw_pois"
+    __table_args__ = (
+        UniqueConstraint("osm_id", "osm_type", name="uq_warsaw_poi_osm"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    osm_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    osm_type: Mapped[str] = mapped_column(String(20), nullable=False)  # node/way/relation
+    category: Mapped[str] = mapped_column(String(50), nullable=False)
+    subcategory: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name_pl: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name_en: Mapped[str | None] = mapped_column(Text, nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    district: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    coordinates: Mapped[Any] = mapped_column(
+        Geometry(geometry_type="POINT", srid=4326), nullable=False
+    )
+    boundary: Mapped[Any | None] = mapped_column(
+        Geometry(geometry_type="GEOMETRY", srid=4326), nullable=True
+    )
+    tags: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+    )
+
+
 class EvaluateCache(Base):
     """Full site evaluation bundle cached by sha256 of request parameters."""
 
