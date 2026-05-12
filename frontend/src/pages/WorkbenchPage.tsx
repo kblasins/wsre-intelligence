@@ -1,10 +1,53 @@
 // Workbench V2 — three-pane: 260px saved-deals/layers | map | 480px PlotEvaluation
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useContext } from "react";
 import Map, { NavigationControl, Popup, type MapRef } from "react-map-gl/maplibre";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { api } from "../lib/api";
+import { LangContext, type Lang } from "../App";
+
+// ── Translation helper ─────────────────────────────────────────────────────────
+
+const TRANSLATIONS: Record<string, { EN: string; PL: string }> = {
+  // Nav / LeftRail categories
+  "Plots & Zoning":    { EN: "Plots & Zoning",    PL: "Działki i MPZP" },
+  "Pipeline":          { EN: "Pipeline",           PL: "Podaż" },
+  "Infrastructure":    { EN: "Infrastructure",     PL: "Infrastruktura" },
+  // Section headers
+  "Zoning & Planning":              { EN: "Zoning & Planning",              PL: "Planowanie i MPZP" },
+  "Land comparable transactions":   { EN: "Land comparable transactions",   PL: "Transakcje gruntowe" },
+  "Apartment exit pricing":         { EN: "Apartment exit pricing",         PL: "Ceny wyjścia — mieszkania" },
+  "Competing residential supply":   { EN: "Competing residential supply",   PL: "Podaż konkurencyjna" },
+  "Demographics & macro":           { EN: "Demographics & macro",           PL: "Demografia i makro" },
+  "Regulatory & political":         { EN: "Regulatory & political",         PL: "Regulacje i ryzyko" },
+  "Recent intelligence":            { EN: "Recent intelligence",            PL: "Aktywność rynkowa" },
+  "Underwriting Snapshot":          { EN: "Underwriting Snapshot",          PL: "Analiza opłacalności" },
+  // Section A KV labels
+  "Function code":      { EN: "Function code",      PL: "Przeznaczenie" },
+  "Max FAR":            { EN: "Max FAR",             PL: "Maks. intensywność" },
+  "Max height":         { EN: "Max height",          PL: "Maks. wysokość" },
+  "Max site coverage":  { EN: "Max site coverage",   PL: "Maks. pow. zabudowy" },
+  "Min greenery":       { EN: "Min greenery",        PL: "Min. udział zieleni" },
+  "Min parking ratio":  { EN: "Min parking ratio",   PL: "Min. parking" },
+  "Front setback":      { EN: "Front setback",       PL: "Cofnięcie frontowe" },
+  // Section I labels
+  "Estimated GDV":                 { EN: "Estimated GDV",                 PL: "Szac. wartość sprzedaży" },
+  "Estimated total cost":          { EN: "Estimated total cost",          PL: "Szac. koszt całkowity" },
+  "Max land price at target IRR":  { EN: "Max land price at target IRR",  PL: "Maks. cena gruntu" },
+  "Build cost":         { EN: "Build cost",          PL: "Koszt budowy" },
+  "Target IRR":         { EN: "Target IRR",          PL: "Docelowe IRR" },
+  "Financing":          { EN: "Financing",           PL: "Finansowanie" },
+  "Sales velocity":     { EN: "Sales velocity",      PL: "Tempo sprzedaży" },
+  "Build duration":     { EN: "Build duration",      PL: "Czas budowy" },
+  // KPI strip
+  "Plot Evaluation":    { EN: "Plot Evaluation",     PL: "Ocena działki" },
+  "land comps":         { EN: "land comps",          PL: "transakcji" },
+};
+
+function t(key: string, lang: Lang): string {
+  return TRANSLATIONS[key]?.[lang] ?? key;
+}
 
 // ── Saved deals registry ───────────────────────────────────────────────────────
 const SAVED_DEALS = [
@@ -354,6 +397,7 @@ function PlotEvalSkeleton() {
 // ── Underwriting (Section I) — reads from API data ────────────────────────────
 
 function Underwriting({ sec }: { sec: SectionI }) {
+  const lang = useContext(LangContext);
   const { inputs, derived, outputs, sensitivity_matrix: sm } = sec;
   const fmtM = (v: number) => (v / 1_000_000).toLocaleString("pl-PL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   const fmtInt = (v: number) => Math.round(v).toLocaleString("pl-PL");
@@ -385,19 +429,19 @@ function Underwriting({ sec }: { sec: SectionI }) {
 
   return (
     <div className="pe-section pe-uw">
-      <SectionHd letter="I" title="Underwriting Snapshot" subtitle="Screening only · not full underwrite" />
+      <SectionHd letter="I" title={t("Underwriting Snapshot", lang)} subtitle={lang === "PL" ? "Analiza wstępna · nie zastępuje pełnego modelu" : "Screening only · not full underwrite"} />
       <div className="pe-uw-grid">
         <div className="pe-uw-out">
           <div className="pe-uw-out-block">
-            <div className="pe-uw-out-label">Estimated GDV</div>
+            <div className="pe-uw-out-label">{t("Estimated GDV", lang)}</div>
             <div className="pe-uw-out-gdv tnum">PLN {fmtM(outputs.estimated_gdv_pln)}M</div>
           </div>
           <div className="pe-uw-out-block" style={{ marginTop: 10 }}>
-            <div className="pe-uw-out-label">Estimated total cost</div>
+            <div className="pe-uw-out-label">{t("Estimated total cost", lang)}</div>
             <div className="pe-uw-out-cost tnum">PLN {fmtM(outputs.estimated_total_cost_pln)}M</div>
           </div>
           <div className="pe-uw-rule" />
-          <div className="pe-uw-out-label">Max land price at target IRR</div>
+          <div className="pe-uw-out-label">{t("Max land price at target IRR", lang)}</div>
           <div className="pe-uw-residual tnum">
             PLN {fmtInt(outputs.residual_land_value_pln_m2)}
             <span className="pe-uw-residual-unit">/m²</span>
@@ -424,11 +468,11 @@ function Underwriting({ sec }: { sec: SectionI }) {
         <div className="pe-uw-divider" />
         <div className="pe-uw-in">
           <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-secondary)", marginBottom: 6 }}>Inputs</div>
-          <InputRow label="Build cost"     sub="PLN/m² PUM"        value={fmtInt(inputs.build_cost_pln_m2_pum)} />
-          <InputRow label="Target IRR"     sub="%"                 value={inputs.target_irr_pct} />
-          <InputRow label="Financing"      sub="% LTV · WIBOR+2.5" value={`${inputs.financing_ltv_pct}%`} />
-          <InputRow label="Sales velocity" sub="units / mo"        value={inputs.sales_velocity_units_per_month} />
-          <InputRow label="Build duration" sub="months"            value={inputs.build_duration_months} />
+          <InputRow label={t("Build cost", lang)}     sub="PLN/m² PUM"                               value={fmtInt(inputs.build_cost_pln_m2_pum)} />
+          <InputRow label={t("Target IRR", lang)}     sub="%"                                        value={inputs.target_irr_pct} />
+          <InputRow label={t("Financing", lang)}      sub="% LTV · WIBOR+2.5"                        value={`${inputs.financing_ltv_pct}%`} />
+          <InputRow label={t("Sales velocity", lang)} sub={lang === "PL" ? "jedn. / mies." : "units / mo"} value={inputs.sales_velocity_units_per_month} />
+          <InputRow label={t("Build duration", lang)} sub={lang === "PL" ? "miesięcy" : "months"}    value={inputs.build_duration_months} />
         </div>
       </div>
       <div style={{ fontSize: 11, color: "var(--text-tertiary)", lineHeight: 1.5, marginTop: 18 }}>
@@ -441,6 +485,7 @@ function Underwriting({ sec }: { sec: SectionI }) {
 // ── PlotEvaluation panel ──────────────────────────────────────────────────────
 
 function PlotEvaluation({ data }: { data: PlotEvalData }) {
+  const lang = useContext(LangContext);
   const [saved, setSaved] = useState(true);
   const { plot: p, section_a_zoning: a, section_b_land_comps: b, section_c_exit_pricing: c,
           section_d_competing_supply: d, section_e_demographics: e, section_f_infrastructure: f,
@@ -464,7 +509,7 @@ function PlotEvaluation({ data }: { data: PlotEvalData }) {
       <div className="pe-id-strip">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>Plot Evaluation · {p.district.charAt(0).toUpperCase() + p.district.slice(1)}</div>
+            <div className="ws-upper" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{t("Plot Evaluation", lang)} · {p.district.charAt(0).toUpperCase() + p.district.slice(1)}</div>
             <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-heading)", marginTop: 4 }}>ul. Towarowa 28 — Wola</div>
             <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 3, fontFamily: "IBM Plex Mono" }}>KW {p.kw_number}</div>
           </div>
@@ -483,18 +528,18 @@ function PlotEvaluation({ data }: { data: PlotEvalData }) {
 
       {/* A — Zoning */}
       <div className="pe-section">
-        <SectionHd letter="A" title="Zoning & Planning" />
+        <SectionHd letter="A" title={t("Zoning & Planning", lang)} />
         <div className={`pe-status ${a.status === "mpzp_enacted" ? "pe-status-ok" : "pe-status-warn"}`}>
           <span className="dot" /> MPZP enacted · {a.mpzp_name} · {a.mpzp_enacted_date ? new Date(a.mpzp_enacted_date).toLocaleDateString("pl-PL", { day: "numeric", month: "short", year: "numeric" }) : "—"}
         </div>
         <KV rows={[
-          ["Function code",     a.function_code],
-          ["Max FAR",           <span className="tnum">{a.parameters.max_far ?? "—"}</span>],
-          ["Max height",        <span><span className="tnum">{a.parameters.max_height_m ?? "—"}</span> m</span>],
-          ["Max site coverage", <span><span className="tnum">{a.parameters.max_site_coverage_pct ?? "—"}</span>%</span>],
-          ["Min greenery",      <span><span className="tnum">{a.parameters.min_greenery_pct ?? "—"}</span>%</span>],
-          ["Min parking ratio", <span><span className="tnum">{a.parameters.min_parking_ratio ?? "—"}</span> per unit</span>],
-          ["Front setback",     <span><span className="tnum">{a.parameters.front_setback_m ?? "—"}</span> m</span>],
+          [t("Function code", lang),     a.function_code],
+          [t("Max FAR", lang),           <span className="tnum">{a.parameters.max_far ?? "—"}</span>],
+          [t("Max height", lang),        <span><span className="tnum">{a.parameters.max_height_m ?? "—"}</span> m</span>],
+          [t("Max site coverage", lang), <span><span className="tnum">{a.parameters.max_site_coverage_pct ?? "—"}</span>%</span>],
+          [t("Min greenery", lang),      <span><span className="tnum">{a.parameters.min_greenery_pct ?? "—"}</span>%</span>],
+          [t("Min parking ratio", lang), <span><span className="tnum">{a.parameters.min_parking_ratio ?? "—"}</span>{lang === "PL" ? " / jedn." : " per unit"}</span>],
+          [t("Front setback", lang),     <span><span className="tnum">{a.parameters.front_setback_m ?? "—"}</span> m</span>],
         ]} />
         {a.notes && (
           <div className="source-quote">
@@ -507,7 +552,7 @@ function PlotEvaluation({ data }: { data: PlotEvalData }) {
 
       {/* B — Land Comps */}
       <div className="pe-section">
-        <SectionHd letter="B" title="Land comparable transactions" subtitle="Last 24 months · 1 km radius · RCN" />
+        <SectionHd letter="B" title={t("Land comparable transactions", lang)} subtitle={lang === "PL" ? "Ostatnie 24 mies. · promień 1 km · RCN" : "Last 24 months · 1 km radius · RCN"} />
         <div className="pe-stat-row">
           <div className="stat"><div className="v tnum">{b.median_pln_m2 ? fmtN(b.median_pln_m2) : "—"}</div><div className="l">PLN/m² median</div></div>
           <div className="stat"><div className="v tnum">{b.comparable_tx_count}</div><div className="l">comparable tx</div></div>
@@ -539,7 +584,7 @@ function PlotEvaluation({ data }: { data: PlotEvalData }) {
 
       {/* C — Apartment Exit */}
       <div className="pe-section">
-        <SectionHd letter="C" title="Apartment exit pricing" subtitle="Wola district · Jawność cen + RCN" />
+        <SectionHd letter="C" title={t("Apartment exit pricing", lang)} subtitle={lang === "PL" ? "Dzielnica Wola · Jawność cen + RCN" : "Wola district · Jawność cen + RCN"} />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div className="pe-mini-card">
             <div className="t">Primary market</div>
@@ -570,7 +615,7 @@ function PlotEvaluation({ data }: { data: PlotEvalData }) {
 
       {/* D — Competing Supply */}
       <div className="pe-section">
-        <SectionHd letter="D" title="Competing residential supply" subtitle="Wola district · Jawność pipeline" />
+        <SectionHd letter="D" title={t("Competing residential supply", lang)} subtitle={lang === "PL" ? "Dzielnica Wola · dane Jawność" : "Wola district · Jawność pipeline"} />
         <div className="pe-stat-row">
           <div className="stat"><div className="v tnum">{fmtN(d.pipeline_units)}</div><div className="l">units in pipeline</div></div>
           <div className="stat"><div className="v tnum">{fmtN(d.delivering_24mo_units)}</div><div className="l">deliver ≤24 m</div></div>
@@ -605,7 +650,7 @@ function PlotEvaluation({ data }: { data: PlotEvalData }) {
 
       {/* E — Demographics */}
       <div className="pe-section">
-        <SectionHd letter="E" title="Demographics & macro" subtitle={`${e.district.charAt(0).toUpperCase() + e.district.slice(1)} · GUS BDL`} />
+        <SectionHd letter="E" title={t("Demographics & macro", lang)} subtitle={`${e.district.charAt(0).toUpperCase() + e.district.slice(1)} · GUS BDL`} />
         <div className="kv">
           <div className="k">Population</div>
           <div className="v">
@@ -637,7 +682,7 @@ function PlotEvaluation({ data }: { data: PlotEvalData }) {
 
       {/* F — Infrastructure */}
       <div className="pe-section">
-        <SectionHd letter="F" title="Infrastructure" subtitle="Distance to amenities" />
+        <SectionHd letter="F" title={t("Infrastructure", lang)} subtitle={lang === "PL" ? "Odległości do udogodnień" : "Distance to amenities"} />
         <div className="kv">
           <div className="k">Nearest metro</div>
           <div className="v">{f.nearest_metro} · <span className="tnum">{f.metro_distance_min}</span> min walk</div>
@@ -660,7 +705,7 @@ function PlotEvaluation({ data }: { data: PlotEvalData }) {
 
       {/* G — Regulatory */}
       <div className="pe-section">
-        <SectionHd letter="G" title="Regulatory & political" subtitle={`Risk indicators · ${e.district.charAt(0).toUpperCase() + e.district.slice(1)}`} />
+        <SectionHd letter="G" title={t("Regulatory & political", lang)} subtitle={`${lang === "PL" ? "Wskaźniki ryzyka" : "Risk indicators"} · ${e.district.charAt(0).toUpperCase() + e.district.slice(1)}`} />
         {g.items.map((item, i) => (
           <div key={i} style={{ display: "grid", gridTemplateColumns: "72px 1fr 14px", gap: 10, padding: "10px 0", borderTop: i ? "1px solid var(--divider)" : "none", alignItems: "flex-start" }}>
             <div>
@@ -678,7 +723,7 @@ function PlotEvaluation({ data }: { data: PlotEvalData }) {
 
       {/* H — Recent Intelligence */}
       <div className="pe-section">
-        <SectionHd letter="H" title="Recent intelligence" subtitle={`Last 30 days · ${e.district.charAt(0).toUpperCase() + e.district.slice(1)} + residential primary`} />
+        <SectionHd letter="H" title={t("Recent intelligence", lang)} subtitle={`${lang === "PL" ? "Ostatnie 30 dni" : "Last 30 days"} · ${e.district.charAt(0).toUpperCase() + e.district.slice(1)} + ${lang === "PL" ? "rynek pierwotny" : "residential primary"}`} />
         {h.items.length === 0 ? (
           <div style={{ fontSize: 12, color: "var(--text-tertiary)", padding: "10px 0" }}>No price-change events in last 30 days.</div>
         ) : h.items.map((item, i) => (
@@ -852,6 +897,7 @@ function LeftRail({
   onPlotsToggle: (label: string, on: boolean) => void;
   wmsStatus: Record<string, "idle" | "loading" | "loaded" | "error">;
 }) {
+  const lang = useContext(LangContext);
   const [tree, setTree] = useState<LayerCat[]>(INITIAL_LAYER_TREE);
   const [dateRange, setDateRange] = useState("24 m");
 
@@ -912,7 +958,7 @@ function LeftRail({
         {tree.map(cat => (
           <div key={cat.key}>
             <div className="layer-row" onClick={() => toggleCat(cat.key)} style={{ cursor: "pointer" }}>
-              <span style={{ flex: 1, fontWeight: 500, fontSize: 12, color: "var(--text-primary)" }}>{cat.label}</span>
+              <span style={{ flex: 1, fontWeight: 500, fontSize: 12, color: "var(--text-primary)" }}>{t(cat.label, lang)}</span>
               <span className="chev">{cat.open ? "▾" : "▸"}</span>
             </div>
             {cat.open && cat.children.map((ch, i) => {

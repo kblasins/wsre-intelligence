@@ -1,5 +1,10 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, createContext, useContext } from "react";
 import { Routes, Route, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
+
+// ── Language context ──────────────────────────────────────────────────────────
+
+export type Lang = "EN" | "PL";
+export const LangContext = createContext<Lang>("EN");
 import { LoginPage } from "./pages/LoginPage";
 import { BriefsPage } from "./pages/BriefsPage";
 import { AdminPage } from "./pages/AdminPage";
@@ -185,7 +190,7 @@ function AppShell() {
         <a
           className={"tab" + (location.pathname.startsWith("/workbench") ? " active" : "")}
           onClick={() => navigate("/workbench")}
-        >Workbench</a>
+        >{lang === "PL" ? "Pulpit" : "Workbench"}</a>
 
         {/* Markets dropdown */}
         <div
@@ -198,7 +203,7 @@ function AppShell() {
             onClick={() => navigate("/commercial")}
             style={{ display: "flex", alignItems: "center" }}
           >
-            Markets <span style={{ marginLeft: 5, fontSize: 9, color: "var(--text-tertiary)" }}>▾</span>
+            {lang === "PL" ? "Rynki" : "Markets"} <span style={{ marginLeft: 5, fontSize: 9, color: "var(--text-tertiary)" }}>▾</span>
           </a>
           {marketsOpen && (
             <div style={{
@@ -208,8 +213,8 @@ function AppShell() {
               boxShadow: "0 8px 24px rgba(0,0,0,0.06)", zIndex: 50,
             }}>
               {[
-                { key: "/commercial", label: "Commercial Market" },
-                { key: "/primary", label: "Primary Residential Market" },
+                { key: "/commercial", labelEN: "Commercial Market",         labelPL: "Rynek komercyjny" },
+                { key: "/primary",    labelEN: "Primary Residential Market", labelPL: "Rynek pierwotny" },
               ].map(c => (
                 <a
                   key={c.key}
@@ -222,7 +227,7 @@ function AppShell() {
                     borderBottom: "1px solid var(--divider)",
                   }}
                 >
-                  {c.label}
+                  {lang === "PL" ? c.labelPL : c.labelEN}
                 </a>
               ))}
             </div>
@@ -232,15 +237,15 @@ function AppShell() {
         <a
           className={"tab" + (location.pathname.startsWith("/submarkets") ? " active" : "")}
           onClick={() => navigate("/submarkets")}
-        >Submarkets</a>
+        >{lang === "PL" ? "Poddzielnice" : "Submarkets"}</a>
         <a
           className={"tab" + (location.pathname.startsWith("/briefs") ? " active" : "")}
           onClick={() => navigate("/briefs")}
-        >Briefs</a>
+        >{lang === "PL" ? "Raporty" : "Briefs"}</a>
         <a
           className={"tab" + (location.pathname.startsWith("/intelligence") ? " active" : "")}
           onClick={() => navigate("/intelligence")}
-        >Intelligence Feed</a>
+        >{lang === "PL" ? "Aktualności" : "Intelligence Feed"}</a>
         <a
           className={"tab" + (location.pathname.startsWith("/admin") ? " active" : "")}
           onClick={() => navigate("/admin")}
@@ -249,7 +254,9 @@ function AppShell() {
 
       {/* ── Page content ───────────────────────────────────────────────────── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <Outlet />
+        <LangContext.Provider value={lang}>
+          <Outlet />
+        </LangContext.Provider>
       </div>
 
       {/* ── Command bar overlay ────────────────────────────────────────────── */}
