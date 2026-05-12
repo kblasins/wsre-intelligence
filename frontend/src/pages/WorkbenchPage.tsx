@@ -484,7 +484,7 @@ function Underwriting({ sec }: { sec: SectionI }) {
 
 // ── PlotEvaluation panel ──────────────────────────────────────────────────────
 
-function PlotEvaluation({ data }: { data: PlotEvalData }) {
+function PlotEvaluation({ data, onCompare }: { data: PlotEvalData; onCompare?: () => void }) {
   const lang = useContext(LangContext);
   const [saved, setSaved] = useState(true);
   const { plot: p, section_a_zoning: a, section_b_land_comps: b, section_c_exit_pricing: c,
@@ -521,8 +521,8 @@ function PlotEvaluation({ data }: { data: PlotEvalData }) {
         </div>
         <div className="pe-actions">
           <button className="pe-btn pe-btn-primary">Generate Plot Report (PDF)</button>
-          <button className="pe-btn">Compare</button>
-          <button className="pe-btn">Track</button>
+          <button className="pe-btn" onClick={onCompare}>{lang === "PL" ? "Porównaj" : "Compare"}</button>
+          <button className="pe-btn">{lang === "PL" ? "Śledź" : "Track"}</button>
         </div>
       </div>
 
@@ -1299,7 +1299,7 @@ export function WorkbenchPage() {
         </aside>
       );
     }
-    if (plotData) return <PlotEvaluation data={plotData} />;
+    if (plotData) return <PlotEvaluation data={plotData} onCompare={() => setCompareOn(v => !v)} />;
     return (
       <aside className="eval-panel" style={{ width: 480, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ textAlign: "center", color: "var(--text-tertiary)", fontSize: 12 }}>
