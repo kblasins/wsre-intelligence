@@ -16,7 +16,7 @@ WSRE Intelligence is the canonical interpretive layer over this data. Foreign ca
 
 ## Project Origin and Fork Disclosure
 
-**This Warsaw platform is a fork of an earlier Saudi Arabia version of the same architecture, also built by Karol Wojcik for CS 153.**
+**This Warsaw platform is a fork of an earlier Saudi Arabia version of the same architecture, also built by Karol Blasinski for CS 153.**
 
 The Saudi version — *WSRE Intelligence — Riyadh Industrial* — served the MODON Riyadh 1 industrial city use case for my role at White Star Real Estate. I pivoted to Warsaw mid-course after identifying that the Polish data landscape was significantly richer than the Saudi equivalent. Specifically:
 
@@ -80,7 +80,9 @@ MIT License. See [LICENSE](./LICENSE).
 
 ## Author
 
-Karol Wojcik
+Karol Blasinski
 Stanford GSB MBA 2026
 CS 153 — Frontier Systems, Spring 2026
 Built for the One-Person Frontier Lab project
+
+For pilot conversations and project inquiries: kblasins@stanford.edu
