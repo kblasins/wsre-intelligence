@@ -58,6 +58,12 @@ Both projects represent my own continuous engineering work. The Warsaw version i
 | Weekly brief cost (Claude Opus) | ~$0.65 |
 | Total build time, solo | 6 weeks |
 
+## Live Demo
+
+📹 [Watch the demo](https://drive.google.com/file/d/103fP8VHmNxfK1nRUS0NQSygvpk2fLvR8/view?usp=sharing)
+
+For pilot conversations and detailed walkthroughs: kblasins@stanford.edu
+
 ## Architecture
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for system architecture, data flow diagram, and component overview.
