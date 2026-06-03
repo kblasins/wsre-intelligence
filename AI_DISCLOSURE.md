@@ -82,7 +82,7 @@ While AI was used extensively, the following decisions and work were mine:
 - **Demo plot selection and underwriting model calibration**: the PLN 61,868/m² residual land value for ul. Towarowa 28 was ground-truthed against real Warsaw assemblages; the 60/40 residential/commercial exit blend for U(MW) zoning was researched against actual Warsaw mixed-use market evidence
 - **Customer persona definitions**: Polish residential developers, foreign capital (family offices and institutional), Warsaw-based asset managers
 - **Strategic positioning**: €399/seat pricing hypothesis, post-CS153 customer development plan, FINN bill timing thesis
-- **Saudi Arabia version as architectural foundation**: also my work, also developed with Claude Code, for my professional role at White Star Real Estate
+- **Saudi Arabia version as architectural foundation**: also my work, also developed with Claude Code, for an earlier industrial real estate research project in the Gulf
 
 ---
 
